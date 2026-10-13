@@ -1,0 +1,11 @@
+**/.env
+**/node_modules/
+**/vendor/
+**/dist/
+**/.vite-cache/
+**/storage/logs/*.log
+**/storage/app/private/proofs/
+**/secrets/
+**/*.session.enc
+**/coverage/
+**/*.tsbuildinfo
