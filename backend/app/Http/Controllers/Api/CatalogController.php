@@ -3,17 +3,20 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\DemoPickupPhoto;
 use App\Services\SatriaService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 
 class CatalogController extends Controller
 {
-    public function __construct(private readonly SatriaService $satria) {}
+    public function __construct(
+        private readonly SatriaService $satria,
+        private readonly DemoPickupPhoto $demoPickupPhoto
+    ) {}
 
     public function products(Request $request): JsonResponse
     {
@@ -121,7 +124,9 @@ class CatalogController extends Controller
                 $height += (int) $product->height_mm * $quantity;
             }
 
-            $orderNo = 'ORD'.now()->format('ymd').strtoupper(Str::random(8));
+            do {
+                $orderNo = 'INV-'.now()->format('Ymd').'-'.str_pad((string) random_int(0, 99999999), 8, '0', STR_PAD_LEFT);
+            } while (DB::table('orders')->where('order_no', $orderNo)->exists());
             $id = DB::table('orders')->insertGetId([
                 'order_no' => $orderNo,
                 'checkout_key' => $input['checkout_key'],
@@ -184,22 +189,166 @@ class CatalogController extends Controller
         return response()->json(['data' => $this->satria->orderPayload($order)]);
     }
 
-    public function tracking(string $awb): JsonResponse
+    public function trackingPreview(Request $request, string $awb): JsonResponse
+    {
+        $shipment = DB::table('shipments as s')
+            ->leftJoin('hubs as origin', 'origin.id', '=', 's.origin_hub_id')
+            ->leftJoin('hubs as destination', 'destination.id', '=', 's.delivery_hub_id')
+            ->where('s.awb', $awb)
+            ->first([
+                's.id', 's.awb', 's.status', 's.updated_at',
+                'origin.name as origin', 'destination.name as destination',
+            ]);
+        abort_if($shipment === null, 404, 'Resi tidak ditemukan.');
+
+        $latestUpdate = DB::table('tracking_events')
+            ->where('shipment_id', $shipment->id)
+            ->orderByDesc('occurred_at')->orderByDesc('id')
+            ->value('occurred_at');
+
+        return response()->json(['data' => [
+            'awb' => $shipment->awb,
+            'status' => $shipment->status,
+            'origin' => $shipment->origin,
+            'destination' => $shipment->destination,
+            'latest_update' => $latestUpdate ?? $shipment->updated_at,
+        ]]);
+    }
+
+    public function tracking(Request $request, string $awb): JsonResponse
     {
         $shipment = DB::table('shipments')->where('awb', $awb)->first();
         abort_if($shipment === null, 404, 'Resi tidak ditemukan.');
+
+        $order = DB::table('orders')->where('id', $shipment->order_id)->first();
+        $isCustomer = (int) $order->customer_id === (int) $request->user()->id;
         $events = DB::table('tracking_events as e')->leftJoin('hubs as h', 'h.id', '=', 'e.hub_id')
             ->where('e.shipment_id', $shipment->id)
             ->orderBy('e.occurred_at')->orderBy('e.id')
-            ->get(['e.event_type', 'e.status_after', 'e.occurred_at', 'h.name as hub_name']);
+            ->get(['e.id', 'e.event_type', 'e.status_after', 'e.occurred_at', 'h.name as hub_name']);
+        $parcel = DB::table('parcels')->where('shipment_id', $shipment->id)
+            ->orderBy('parcel_no')->first(['weight_grams', 'length_mm', 'width_mm', 'height_mm']);
+        $issue = DB::table('shipment_issues')->where('shipment_id', $shipment->id)
+            ->orderByDesc('created_at')->orderByDesc('id')->first();
+        $attempt = $issue ? DB::table('delivery_attempts')->where('id', $issue->delivery_attempt_id)
+            ->first(['failure_reason', 'attempted_at']) : null;
+        $pickupPhoto = $isCustomer
+            ? DB::table('pickup_assignments as a')->join('pickup_tasks as t', 't.id', '=', 'a.pickup_task_id')
+                ->where('t.shipment_id', $shipment->id)->where('a.status', 'COMPLETED')
+                ->whereNotNull('a.pickup_photo_ref')->orderByDesc('a.id')
+                ->first(['a.pickup_photo_ref', 'a.picked_up_at'])
+            : null;
+        if ($pickupPhoto?->pickup_photo_ref === DemoPickupPhoto::PATH) {
+            $this->demoPickupPhoto->ensureStored();
+        }
+        $deliveryPhoto = $isCustomer && $shipment->status === 'DELIVERED'
+            ? DB::table('delivery_attempts')->where('shipment_id', $shipment->id)
+                ->where('result', 'DELIVERED')->whereNotNull('delivery_photo_ref')
+                ->orderByDesc('attempt_no')->first(['delivery_photo_ref', 'attempted_at'])
+            : null;
+        $pickupDetails = $pickupPhoto
+            ? DB::table('tracking_events')->where('shipment_id', $shipment->id)
+                ->where('event_type', 'PICKED_UP')->orderByDesc('id')->value('details')
+            : null;
+        $deliveryDetails = $deliveryPhoto
+            ? DB::table('tracking_events')->where('shipment_id', $shipment->id)
+                ->where('event_type', 'DELIVERED')->orderByDesc('id')->value('details')
+            : null;
+        $pickupCapturedAt = $pickupDetails ? json_decode($pickupDetails, true)['photo_captured_at'] ?? null : null;
+        $deliveryCapturedAt = $deliveryDetails ? json_decode($deliveryDetails, true)['photo_captured_at'] ?? null : null;
 
         return response()->json(['data' => [
             'awb' => $shipment->awb,
             'status' => $shipment->status,
             'created_at' => $shipment->created_at,
             'delivered_at' => $shipment->delivered_at,
+            'latest_update' => $events->last()?->occurred_at ?? $shipment->updated_at,
+            'origin' => DB::table('hubs')->where('id', $shipment->origin_hub_id)->value('name'),
+            'destination' => DB::table('hubs')->where('id', $shipment->delivery_hub_id)->value('name'),
+            'parcel' => $parcel,
+            'is_customer' => $isCustomer,
+            'sender_name' => $isCustomer ? $order->origin_contact_snapshot : null,
+            'recipient_name' => $isCustomer ? $order->recipient_name : null,
+            'origin_address' => $isCustomer ? $order->origin_address_snapshot : null,
+            'destination_address' => $isCustomer ? $order->destination_address_snapshot : null,
+            'issue' => $issue ? [
+                'status' => $issue->status,
+                'decision' => $issue->decision,
+                'failure_reason' => $isCustomer ? $attempt?->failure_reason : null,
+                'attempted_at' => $attempt?->attempted_at,
+                'scheduled_redelivery_at' => $isCustomer ? $issue->scheduled_redelivery_at : null,
+                'reschedule_confirmed' => $isCustomer && DB::table('tracking_events')
+                    ->where('shipment_id', $shipment->id)->where('event_type', 'BUYER_CONFIRMED_RESCHEDULE')
+                    ->where('details->issue_id', $issue->id)->exists(),
+            ] : null,
+            'pickup_photo_available' => $pickupPhoto !== null && Storage::disk('local')->exists($pickupPhoto->pickup_photo_ref),
+            'pickup_photo_taken_at' => $pickupPhoto ? $pickupCapturedAt ?? $pickupPhoto->picked_up_at : null,
+            'proof_available' => $deliveryPhoto !== null && Storage::disk('local')->exists($deliveryPhoto->delivery_photo_ref),
+            'delivery_photo_taken_at' => $deliveryPhoto ? $deliveryCapturedAt ?? $deliveryPhoto->attempted_at : null,
+            'recipient_confirmed' => $isCustomer && DB::table('tracking_events')
+                ->where('shipment_id', $shipment->id)->where('event_type', 'BUYER_CONFIRMED_RECEIVED')->exists(),
             'events' => $events,
         ]]);
+    }
+
+    public function pickupPhotoByAwb(Request $request, string $awb): Response
+    {
+        $shipment = DB::table('shipments')->where('awb', $awb)->first();
+        abort_if($shipment === null, 404, 'Resi tidak ditemukan.');
+        $order = DB::table('orders')->where('id', $shipment->order_id)->first();
+        abort_unless($order !== null && (int) $order->customer_id === (int) $request->user()->id, 403);
+
+        $photoRef = DB::table('pickup_assignments as a')->join('pickup_tasks as t', 't.id', '=', 'a.pickup_task_id')
+            ->where('t.shipment_id', $shipment->id)->where('a.status', 'COMPLETED')
+            ->whereNotNull('a.pickup_photo_ref')->orderByDesc('a.id')->value('a.pickup_photo_ref');
+        abort_if($photoRef === null, 404, 'Foto pickup belum tersedia.');
+        if ($photoRef === DemoPickupPhoto::PATH) {
+            $this->demoPickupPhoto->ensureStored();
+        }
+        abort_unless(Storage::disk('local')->exists($photoRef), 404, 'Berkas foto pickup tidak ditemukan.');
+
+        return Storage::disk('local')->response($photoRef, null, ['Cache-Control' => 'private, no-store']);
+    }
+
+    public function deliveryPhotoByAwb(Request $request, string $awb): Response
+    {
+        $orderId = DB::table('shipments')->where('awb', $awb)->value('order_id');
+        abort_if($orderId === null, 404, 'Resi tidak ditemukan.');
+
+        return $this->deliveryPhoto($request, (int) $orderId);
+    }
+
+    public function confirmRescheduleByAwb(Request $request, string $awb): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'BUYER');
+        $shipment = DB::table('shipments as shipment')->join('orders as order', 'order.id', '=', 'shipment.order_id')
+            ->where('shipment.awb', $awb)->where('order.customer_id', $request->user()->id)
+            ->first(['shipment.id', 'shipment.status', 'shipment.delivery_hub_id']);
+        abort_if($shipment === null, 404, 'Resi tidak ditemukan pada akun ini.');
+        $issue = DB::table('shipment_issues')->where('shipment_id', $shipment->id)
+            ->orderByDesc('id')->first();
+        abort_unless($issue !== null && $issue->decision === 'RESCHEDULE' &&
+            $issue->scheduled_redelivery_at !== null &&
+            in_array($shipment->status, ['WAITING_REDELIVERY', 'DELIVERY_ASSIGNED'], true),
+            409, 'Jadwal pengantaran ulang belum tersedia untuk dikonfirmasi.');
+        $confirmed = DB::table('tracking_events')->where('shipment_id', $shipment->id)
+            ->where('event_type', 'BUYER_CONFIRMED_RESCHEDULE')
+            ->where('details->issue_id', $issue->id)->exists();
+        if (! $confirmed) {
+            $this->satria->event($shipment->id, $request->user()->id, 'BUYER_CONFIRMED_RESCHEDULE',
+                $shipment->status, ['issue_id' => $issue->id, 'scheduled_at' => $issue->scheduled_redelivery_at],
+                $shipment->delivery_hub_id);
+        }
+
+        return response()->json(['data' => ['confirmed' => true, 'awb' => $awb]]);
+    }
+
+    public function confirmReceivedByAwb(Request $request, string $awb): JsonResponse
+    {
+        $orderId = DB::table('shipments')->where('awb', $awb)->value('order_id');
+        abort_if($orderId === null, 404, 'Resi tidak ditemukan.');
+
+        return $this->confirmReceived($request, (int) $orderId);
     }
 
     public function deliveryPhoto(Request $request, int $id): Response

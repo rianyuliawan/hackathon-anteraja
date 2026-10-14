@@ -24,3 +24,13 @@ php artisan serve --host=127.0.0.1 --port=8000
 ```
 
 Sesuaikan `DB_*` di `.env` sebelum migration; [panduan backend](backend/README.md) menjelaskan pembuatan database PostgreSQL lokal. Cek API di `http://127.0.0.1:8000/`. Pengujian fitur: `php artisan test --compact tests/Feature/SatriaFlowTest.php` dengan database PostgreSQL khusus test. File `.env`, `vendor`, volume Docker, dan data runtime tidak perlu di-commit.
+
+## Rute jalan lokal
+
+Peta run memakai geometri jalan dari OSRM lokal, terpisah dari PostgreSQL lokal. Jalankan sekali dari root proyek:
+
+```bash
+./routing/start-local.sh
+```
+
+Skrip mengunduh ekstrak jalan Jakarta publik, memprosesnya di Docker, lalu membuka OSRM hanya pada `127.0.0.1:5000`. Berkas peta ada di `routing/data/` dan diabaikan Git. Jalankan kembali skrip yang sama setelah restart jika kontainer belum aktif. Hentikan dengan `docker stop anteraja-osrm`. Laravel memakai `OSRM_URL=http://127.0.0.1:5000` secara default; alamat tujuan pengiriman tidak dikirim ke router publik. Kamera kurir memerlukan HTTPS pada ponsel atau `localhost` pada mesin pengembang.

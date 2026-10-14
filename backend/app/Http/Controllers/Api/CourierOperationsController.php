@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\SatriaService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,9 +23,11 @@ class CourierOperationsController extends Controller
             ->join('shipments as s', 's.id', '=', 't.shipment_id')
             ->join('orders as o', 'o.id', '=', 's.order_id')
             ->join('seller_locations as l', 'l.id', '=', 'o.seller_location_id')
+            ->join('hubs as h', 'h.id', '=', 's.origin_hub_id')
             ->where('a.courier_user_id', $request->user()->id)
             ->select('a.*', 's.awb', 's.id as shipment_id', 'o.origin_address_snapshot as seller_address',
-                'l.contact_phone as seller_phone', 'l.contact_name as seller_name')
+                'l.contact_phone as seller_phone', 'l.contact_name as seller_name',
+                'h.name as hub_name', 'h.address as hub_address')
             ->orderByDesc('a.assigned_at')->limit(100)->get();
 
         return response()->json(['data' => $rows]);
@@ -53,45 +56,17 @@ class CourierOperationsController extends Controller
         return response()->json(['data' => $assignment]);
     }
 
-    public function rejectPickup(Request $request, int $id): JsonResponse
-    {
-        $this->satria->requireRole($request->user(), 'COURIER');
-        $input = $request->validate(['reason' => ['required', 'string', 'max:500']]);
-        $assignment = DB::transaction(function () use ($request, $id, $input): object {
-            $assignment = DB::table('pickup_assignments')->where('id', $id)->lockForUpdate()->first();
-            abort_if($assignment === null, 404);
-            abort_unless($assignment->courier_user_id === $request->user()->id, 403);
-            if ($assignment->status === 'REJECTED') {
-                return $assignment;
-            }
-            abort_unless($assignment->status === 'PENDING_ACCEPT', 409, 'Tugas pickup sudah dijawab.');
-            DB::table('pickup_assignments')->where('id', $id)->update([
-                'status' => 'REJECTED', 'responded_at' => now(), 'reject_reason' => $input['reason'],
-            ]);
-            $task = DB::table('pickup_tasks')->where('id', $assignment->pickup_task_id)->first();
-            DB::table('pickup_tasks')->where('id', $task->id)->update(['status' => 'READY_FOR_PICKUP']);
-            DB::table('shipments')->where('id', $task->shipment_id)->update([
-                'status' => 'READY_FOR_PICKUP', 'updated_at' => now(),
-            ]);
-            $eventId = $this->satria->event($task->shipment_id, $request->user()->id,
-                'PICKUP_REJECTED', 'READY_FOR_PICKUP', ['reason' => $input['reason']]);
-            $this->satria->notifyRoleAtHub($eventId, $task->shipment_id, 'OPS_ADMIN', null,
-                'PICKUP_REJECTED', 'Kurir menolak pickup. Admin perlu assign ulang.');
-
-            return DB::table('pickup_assignments')->where('id', $id)->first();
-        });
-
-        return response()->json(['data' => $assignment]);
-    }
-
     public function completePickup(Request $request, int $id): JsonResponse
     {
         $this->satria->requireRole($request->user(), 'COURIER');
         $input = $request->validate([
             'awb' => ['required', 'string'],
             'photo' => ['required', 'image', 'max:5120'],
-            'picked_up_at' => ['nullable', 'date'],
+            'captured_at' => ['required', 'date'],
         ]);
+        $capturedAt = Carbon::parse($input['captured_at']);
+        abort_if($capturedAt->lt(now()->subMinutes(5)) || $capturedAt->gt(now()->addSeconds(30)),
+            422, 'Foto pickup harus diambil dari kamera dalam lima menit terakhir.');
         $photoRef = $request->file('photo')->store('proofs/pickup', 'local');
         abort_if($photoRef === false, 422, 'Foto pickup gagal disimpan.');
         try {
@@ -104,9 +79,8 @@ class CourierOperationsController extends Controller
                 $shipment = DB::table('shipments')->where('id', $task->shipment_id)->lockForUpdate()->first();
                 abort_unless($shipment->awb === $input['awb'] && $shipment->status === 'PICKUP_ASSIGNED',
                     409, 'Resi atau status paket tidak sesuai.');
-                $pickedAt = $input['picked_up_at'] ?? now();
                 DB::table('pickup_assignments')->where('id', $id)->update([
-                    'status' => 'COMPLETED', 'picked_up_at' => $pickedAt,
+                    'status' => 'COMPLETED', 'picked_up_at' => now(),
                     'pickup_photo_ref' => $photoRef,
                 ]);
                 DB::table('pickup_tasks')->where('id', $task->id)->update(['status' => 'PICKED_UP']);
@@ -115,7 +89,7 @@ class CourierOperationsController extends Controller
                     'current_courier_id' => $request->user()->id, 'updated_at' => now(),
                 ]);
                 $eventId = $this->satria->event($shipment->id, $request->user()->id,
-                    'PICKED_UP', 'PICKED_UP');
+                    'PICKED_UP', 'PICKED_UP', ['photo_captured_at' => $input['captured_at']]);
                 $order = DB::table('orders')->where('id', $shipment->order_id)->first();
                 $this->satria->notifyUser($eventId, $shipment->id, $order->customer_id, 'BUYER',
                     'PICKED_UP', "Paket {$shipment->awb} sudah diambil kurir dari toko.");
@@ -207,6 +181,63 @@ class CourierOperationsController extends Controller
         return response()->json(['data' => $this->satria->runPayload($run)]);
     }
 
+    public function respondRun(Request $request, int $id): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'COURIER');
+        $input = $request->validate([
+            'decisions' => ['required', 'array', 'min:1', 'max:50'],
+            'decisions.*.shipment_id' => ['required', 'integer', 'distinct', 'exists:shipments,id'],
+            'decisions.*.decision' => ['required', Rule::in(['ACCEPTED', 'REJECTED'])],
+            'decisions.*.reason' => ['nullable', 'string', 'max:500'],
+        ]);
+        $run = DB::transaction(function () use ($request, $id, $input): object {
+            $run = DB::table('delivery_runs')->where('id', $id)->lockForUpdate()->first();
+            abort_if($run === null, 404);
+            abort_unless($run->courier_user_id === $request->user()->id, 403);
+            abort_unless($run->status === 'PENDING_ACCEPT', 409, 'Run sudah dijawab.');
+            $rows = DB::table('run_shipments')->where('run_id', $id)->lockForUpdate()->get();
+            $expectedIds = $rows->pluck('shipment_id')->map(fn ($value): int => (int) $value)->sort()->values()->all();
+            $decisions = collect($input['decisions'])->keyBy('shipment_id');
+            $actualIds = $decisions->keys()->map(fn ($value): int => (int) $value)->sort()->values()->all();
+            abort_unless($expectedIds === $actualIds && $rows->every(fn ($row): bool => $row->status === 'ASSIGNED'),
+                422, 'Setiap paket dalam run harus dijawab tepat satu kali.');
+            $accepted = 0;
+            foreach ($rows as $row) {
+                $choice = $decisions->get($row->shipment_id);
+                if ($choice['decision'] === 'ACCEPTED') {
+                    $accepted++;
+                    $this->satria->event($row->shipment_id, $request->user()->id,
+                        'DELIVERY_RUN_ACCEPTED', 'DELIVERY_ASSIGNED', ['run_id' => $id], $run->hub_id);
+
+                    continue;
+                }
+                $reason = trim($choice['reason'] ?? '');
+                abort_unless(mb_strlen($reason) >= 5, 422, 'Alasan wajib diisi untuk setiap paket yang ditolak.');
+                DB::table('run_shipments')->where('id', $row->id)->update([
+                    'status' => 'CANCELLED', 'rejection_reason' => $reason,
+                ]);
+                $hasFailure = DB::table('delivery_attempts')->where('shipment_id', $row->shipment_id)
+                    ->where('result', 'FAILED')->exists();
+                $nextStatus = $hasFailure ? 'WAITING_REDELIVERY' : 'READY_FOR_LAST_MILE';
+                DB::table('shipments')->where('id', $row->shipment_id)->update([
+                    'status' => $nextStatus, 'updated_at' => now(),
+                ]);
+                $eventId = $this->satria->event($row->shipment_id, $request->user()->id,
+                    'DELIVERY_ASSIGNMENT_REJECTED', $nextStatus,
+                    ['run_id' => $id, 'reason' => $reason], $run->hub_id);
+                $this->satria->notifyRoleAtHub($eventId, $row->shipment_id, 'HUB_OPERATOR', $run->hub_id,
+                    'DELIVERY_ASSIGNMENT_REJECTED', "Paket dalam run #{$id} ditolak kurir. Assign ulang dari antrean hub.");
+            }
+            DB::table('delivery_runs')->where('id', $id)->update([
+                'status' => $accepted > 0 ? 'ACCEPTED' : 'REJECTED', 'responded_at' => now(),
+            ]);
+
+            return DB::table('delivery_runs')->where('id', $id)->first();
+        });
+
+        return response()->json(['data' => $this->satria->runPayload($run)]);
+    }
+
     public function startRun(Request $request, int $id): JsonResponse
     {
         $this->satria->requireRole($request->user(), 'COURIER');
@@ -218,10 +249,15 @@ class CourierOperationsController extends Controller
                 return $run;
             }
             abort_unless($run->status === 'ACCEPTED', 409, 'Run belum diterima.');
-            abort_if(today()->toDateString() < $run->service_date, 409, 'Tanggal layanan run belum tiba.');
-            $rows = DB::table('run_shipments')->where('run_id', $id)->get();
-            abort_unless($rows->isNotEmpty() && $rows->every(fn ($row) => $row->status === 'HANDED_OVER'),
-                409, 'Semua paket harus diserahterimakan dahulu.');
+            abort_if(DB::table('delivery_runs')->where('courier_user_id', $run->courier_user_id)
+                ->where('id', '!=', $run->id)->where('status', 'OUT_FOR_DELIVERY')->exists(),
+                409, 'Selesaikan run pengantaran yang sedang berjalan lebih dulu.');
+            abort_if(today('Asia/Jakarta')->lt(Carbon::parse($run->service_date, 'Asia/Jakarta')->startOfDay()),
+                409, 'Tanggal pengantaran belum tiba.');
+            $rows = DB::table('run_shipments')->where('run_id', $id)
+                ->where('status', 'HANDED_OVER')->get();
+            abort_unless($rows->isNotEmpty() && ! DB::table('run_shipments')->where('run_id', $id)
+                ->where('status', 'ASSIGNED')->exists(), 409, 'Semua paket yang diterima harus diserahterimakan dahulu.');
             DB::table('delivery_runs')->where('id', $id)->update(['status' => 'OUT_FOR_DELIVERY']);
             foreach ($rows as $row) {
                 $shipment = DB::table('shipments')->where('id', $row->shipment_id)->first();
@@ -255,6 +291,7 @@ class CourierOperationsController extends Controller
             'result' => ['required', Rule::in(['DELIVERED', 'FAILED'])],
             'recipient_name' => ['required_if:result,DELIVERED', 'nullable', 'string', 'max:160'],
             'photo' => ['required_if:result,DELIVERED', 'nullable', 'image', 'max:5120'],
+            'captured_at' => ['required_with:photo', 'nullable', 'date'],
             'failure_reason' => ['required_if:result,FAILED', 'nullable', Rule::in([
                 'PENERIMA_TIDAK_ADA', 'ALAMAT_TIDAK_DITEMUKAN', 'PENERIMA_MENOLAK',
                 'AKSES_TERHALANG', 'LAINNYA',
@@ -262,6 +299,11 @@ class CourierOperationsController extends Controller
             'notes' => ['nullable', 'string', 'max:1000'],
             'attempted_at' => ['nullable', 'date'],
         ]);
+        if ($request->hasFile('photo')) {
+            $capturedAt = Carbon::parse($input['captured_at']);
+            abort_if($capturedAt->lt(now()->subMinutes(5)) || $capturedAt->gt(now()->addSeconds(30)),
+                422, 'Foto harus diambil dari kamera dalam lima menit terakhir.');
+        }
         $photoRef = $request->hasFile('photo')
             ? $request->file('photo')->store('proofs/delivery', 'local') : null;
         abort_if($photoRef === false, 422, 'Foto hasil antar gagal disimpan.');
@@ -319,7 +361,8 @@ class CourierOperationsController extends Controller
                 $eventType = $success ? 'DELIVERED' : 'DELIVERY_FAILED';
                 $eventId = $this->satria->event($shipment->id, $request->user()->id,
                     $eventType, $eventType,
-                    ['attempt_no' => $attemptNo, 'failure_reason' => $success ? null : $input['failure_reason']]);
+                    ['attempt_no' => $attemptNo, 'failure_reason' => $success ? null : $input['failure_reason'],
+                        'photo_captured_at' => $input['captured_at'] ?? null]);
                 $order = DB::table('orders')->where('id', $shipment->order_id)->first();
                 $reasonLabel = [
                     'PENERIMA_TIDAK_ADA' => 'penerima tidak ada di lokasi',

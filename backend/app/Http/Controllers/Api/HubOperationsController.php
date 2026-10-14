@@ -3,11 +3,15 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\DailyReportXlsx;
 use App\Services\DeliveryStopPlanner;
 use App\Services\SatriaService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class HubOperationsController extends Controller
 {
@@ -29,11 +33,99 @@ class HubOperationsController extends Controller
         return response()->json(['data' => $rows]);
     }
 
+    public function hubDailyReports(Request $request, int $id): JsonResponse
+    {
+        $this->satria->requireHub($request->user(), $id);
+        $date = $request->validate(['date' => ['nullable', 'date_format:Y-m-d']])['date'] ?? today()->toDateString();
+        $rows = DB::table('daily_reports as report')->join('hubs as hub', 'hub.id', '=', 'report.hub_id')
+            ->where('report.hub_id', $id)->where('report.report_date', $date)
+            ->get(['report.*', 'hub.name as hub_name']);
+
+        return response()->json(['data' => $rows]);
+    }
+
+    public function generateHubDailyReport(Request $request, int $id): JsonResponse
+    {
+        $this->satria->requireHub($request->user(), $id);
+        abort_unless(DB::table('hubs')->where('id', $id)->exists(), 404);
+        $date = $request->validate(['report_date' => ['nullable', 'date_format:Y-m-d']])['report_date']
+            ?? today()->toDateString();
+
+        return response()->json(['data' => $this->satria->generateDailyReports($date, $id)]);
+    }
+
+    public function downloadHubDailyReport(Request $request, int $id, DailyReportXlsx $xlsx): BinaryFileResponse
+    {
+        $this->satria->requireHub($request->user(), $id);
+        $hub = DB::table('hubs')->where('id', $id)->first();
+        abort_if($hub === null, 404);
+        $date = $request->validate(['date' => ['nullable', 'date_format:Y-m-d']])['date'] ?? today()->toDateString();
+        $this->satria->generateDailyReports($date, $id);
+        $path = $xlsx->create($id, $date);
+
+        return response()->download($path, "laporan-{$hub->code}-{$date}.xlsx", [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+    }
+
+    public function attentionCounts(Request $request, int $id): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
+        $pickupNeedsAssignment = DB::table('pickup_tasks as task')
+            ->join('shipments as shipment', 'shipment.id', '=', 'task.shipment_id')
+            ->where('shipment.origin_hub_id', $id)
+            ->whereIn('task.status', ['WAITING_SELLER_READY', 'READY_FOR_PICKUP'])
+            ->count();
+        $inboundNeedsScan = DB::table('shipments')
+            ->where('delivery_hub_id', $id)
+            ->whereIn('status', ['PICKED_UP', 'IN_TRANSIT'])
+            ->count();
+        $deliveryNeedsAssignment = DB::table('shipments')
+            ->where('delivery_hub_id', $id)
+            ->where('current_hub_id', $id)
+            ->whereIn('status', ['READY_FOR_LAST_MILE', 'WAITING_REDELIVERY'])
+            ->count();
+        $handoverNeedsConfirmation = DB::table('delivery_runs as run')
+            ->where('run.hub_id', $id)
+            ->where('run.status', 'ACCEPTED')
+            ->whereExists(function ($query): void {
+                $query->selectRaw('1')->from('run_shipments as item')
+                    ->whereColumn('item.run_id', 'run.id')->where('item.status', 'ASSIGNED');
+            })->count();
+        $failedNeedsReturn = DB::table('shipments')
+            ->where('delivery_hub_id', $id)
+            ->where('status', 'DELIVERY_FAILED')
+            ->where('custody_type', 'COURIER')
+            ->count();
+        $returnedNeedsDecision = DB::table('shipments as shipment')
+            ->where('shipment.delivery_hub_id', $id)
+            ->where('shipment.status', 'AT_HUB_AWAITING_DECISION')
+            ->whereExists(function ($query): void {
+                $query->selectRaw('1')->from('shipment_issues as issue')
+                    ->whereColumn('issue.shipment_id', 'shipment.id')->where('issue.status', 'OPEN');
+            })->count();
+
+        return response()->json(['data' => [
+            'pickup_needs_assignment' => $pickupNeedsAssignment,
+            'inbound_needs_scan' => $inboundNeedsScan,
+            'delivery_needs_assignment' => $deliveryNeedsAssignment,
+            'handover_needs_confirmation' => $handoverNeedsConfirmation,
+            'failed_needs_return' => $failedNeedsReturn,
+            'returned_needs_decision' => $returnedNeedsDecision,
+        ]]);
+    }
+
     public function hubInbound(Request $request, int $id): JsonResponse
     {
         $this->satria->requireHub($request->user(), $id);
-        $rows = DB::table('shipments')->where('delivery_hub_id', $id)
-            ->whereIn('status', ['PICKED_UP', 'IN_TRANSIT'])->orderBy('created_at')->get()
+        $rows = DB::table('shipments as shipment')
+            ->join('hubs as origin', 'origin.id', '=', 'shipment.origin_hub_id')
+            ->where('shipment.delivery_hub_id', $id)
+            ->whereIn('shipment.status', [
+                'WAITING_SELLER_READY', 'READY_FOR_PICKUP', 'PICKUP_ASSIGNED', 'PICKED_UP', 'IN_TRANSIT',
+            ])
+            ->orderByDesc('shipment.created_at')->limit(100)
+            ->get(['shipment.*', 'origin.name as origin_hub_name'])
             ->map(fn ($shipment) => $this->satria->shipmentPayload($shipment));
 
         return response()->json(['data' => $rows]);
@@ -46,7 +138,17 @@ class HubOperationsController extends Controller
             ->where('current_hub_id', $id)
             ->whereIn('status', ['READY_FOR_LAST_MILE', 'WAITING_REDELIVERY'])
             ->orderBy('created_at')->get()
-            ->map(fn ($shipment) => $this->satria->shipmentPayload($shipment));
+            ->map(function ($shipment): array {
+                $readySince = DB::table('tracking_events')->where('shipment_id', $shipment->id)
+                    ->whereIn('event_type', ['ARRIVED_AT_DELIVERY_HUB', 'REDELIVERY_SCHEDULED'])
+                    ->orderByDesc('occurred_at')->value('occurred_at') ?? $shipment->created_at;
+
+                return array_merge($this->satria->shipmentPayload($shipment), [
+                    'ready_since' => $readySince,
+                    'waiting_hours' => max(0, round((now()->timestamp - strtotime((string) $readySince)) / 3600, 1)),
+                    'age_hours' => max(0, round((now()->timestamp - strtotime((string) $shipment->created_at)) / 3600, 1)),
+                ]);
+            });
 
         return response()->json(['data' => $rows]);
     }
@@ -68,9 +170,221 @@ class HubOperationsController extends Controller
         return response()->json(['data' => $rows]);
     }
 
+    public function pickupTasks(Request $request, int $id): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
+        $rows = DB::table('pickup_tasks as task')->join('shipments as shipment', 'shipment.id', '=', 'task.shipment_id')
+            ->where('shipment.origin_hub_id', $id)->orderByDesc('task.created_at')->limit(100)
+            ->get('task.*')->map(function ($task): array {
+                $shipment = DB::table('shipments')->where('id', $task->shipment_id)->first();
+
+                return array_merge((array) $task, [
+                    'shipment' => $this->satria->shipmentPayload($shipment),
+                    'assignments' => DB::table('pickup_assignments')->where('pickup_task_id', $task->id)
+                        ->orderByDesc('id')->get(),
+                ]);
+            });
+
+        return response()->json(['data' => $rows]);
+    }
+
+    public function pickupCouriers(Request $request, int $id): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
+        $rows = DB::table('courier_profiles as c')->join('users as u', 'u.id', '=', 'c.user_id')
+            ->where('c.home_hub_id', $id)->where('u.active', true)
+            ->select('c.*', 'u.name', 'u.email', 'u.phone')->orderBy('u.name')->get()
+            ->map(function ($courier): array {
+                return array_merge((array) $courier, [
+                    'zones' => DB::table('courier_zones as cz')->join('service_zones as z', 'z.id', '=', 'cz.zone_id')
+                        ->where('cz.courier_user_id', $courier->user_id)
+                        ->where('cz.service_type', 'PICKUP')->get(['z.id', 'z.name', 'cz.service_type']),
+                ]);
+            });
+
+        return response()->json(['data' => $rows]);
+    }
+
+    public function hubIssues(Request $request, int $hubId): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $hubId);
+        $rows = DB::table('shipment_issues as issue')
+            ->join('shipments as shipment', 'shipment.id', '=', 'issue.shipment_id')
+            ->where('shipment.delivery_hub_id', $hubId)->orderByDesc('issue.created_at')
+            ->limit(100)->get('issue.*')->map(function ($issue): array {
+                $shipment = DB::table('shipments')->where('id', $issue->shipment_id)->first();
+                $attempt = DB::table('delivery_attempts')->where('id', $issue->delivery_attempt_id)->first();
+
+                return array_merge((array) $issue, [
+                    'shipment' => $this->satria->shipmentPayload($shipment),
+                    'attempt' => $attempt,
+                    'delivery_attempt' => $attempt,
+                ]);
+            });
+
+        return response()->json(['data' => $rows]);
+    }
+
+    public function markPickupReady(Request $request, int $id, int $taskId): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
+        $task = DB::transaction(function () use ($request, $id, $taskId): object {
+            $task = DB::table('pickup_tasks')->where('id', $taskId)->lockForUpdate()->first();
+            abort_if($task === null, 404);
+            abort_unless(DB::table('shipments')->where('id', $task->shipment_id)
+                ->where('origin_hub_id', $id)->exists(), 403, 'Pickup bukan tugas hub ini.');
+            if ($task->status === 'READY_FOR_PICKUP') {
+                return $task;
+            }
+            abort_unless($task->status === 'WAITING_SELLER_READY', 409, 'Pickup tidak dapat ditandai siap.');
+            DB::table('pickup_tasks')->where('id', $taskId)->update(['status' => 'READY_FOR_PICKUP', 'ready_at' => now()]);
+            DB::table('shipments')->where('id', $task->shipment_id)->update([
+                'status' => 'READY_FOR_PICKUP', 'updated_at' => now(),
+            ]);
+            $this->satria->event($task->shipment_id, $request->user()->id, 'SELLER_READY', 'READY_FOR_PICKUP');
+
+            return DB::table('pickup_tasks')->where('id', $taskId)->first();
+        });
+
+        return response()->json(['data' => $task]);
+    }
+
+    public function assignPickup(Request $request, int $id, int $taskId): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
+        $input = $request->validate([
+            'courier_user_id' => ['required', 'integer', 'exists:courier_profiles,user_id'],
+            'scheduled_at' => ['nullable', 'date'],
+        ]);
+        $assignment = DB::transaction(function () use ($request, $id, $taskId, $input): object {
+            $task = DB::table('pickup_tasks')->where('id', $taskId)->lockForUpdate()->first();
+            abort_if($task === null, 404);
+            abort_unless(DB::table('shipments')->where('id', $task->shipment_id)
+                ->where('origin_hub_id', $id)->exists(), 403, 'Pickup bukan tugas hub ini.');
+            abort_unless($task->status === 'READY_FOR_PICKUP', 409, 'Paket belum siap pickup.');
+            $shipment = DB::table('shipments')->where('id', $task->shipment_id)->lockForUpdate()->first();
+            $courier = DB::table('courier_profiles')->where('user_id', $input['courier_user_id'])
+                ->lockForUpdate()->first();
+            abort_unless($courier?->available && $courier->home_hub_id === $id && DB::table('users')->where('id', $courier->user_id)
+                ->where('active', true)->exists(), 422, 'Kurir tidak tersedia.');
+            abort_unless(DB::table('courier_zones as courier_zone')
+                ->join('service_zones as zone', 'zone.id', '=', 'courier_zone.zone_id')
+                ->where('courier_zone.courier_user_id', $courier->user_id)
+                ->where('courier_zone.service_type', 'PICKUP')
+                ->where('zone.hub_id', $id)->exists(),
+                422, 'Kurir tidak bertugas pickup dari hub ini.');
+            $weight = DB::table('parcels')->where('shipment_id', $shipment->id)->sum('weight_grams');
+            $activeShipments = DB::table('pickup_assignments as a')
+                ->join('pickup_tasks as t', 't.id', '=', 'a.pickup_task_id')
+                ->where('a.courier_user_id', $courier->user_id)
+                ->whereIn('a.status', ['PENDING_ACCEPT', 'ACCEPTED', 'IN_PROGRESS'])
+                ->pluck('t.shipment_id');
+            $activeWeight = DB::table('parcels')->whereIn('shipment_id', $activeShipments)
+                ->sum('weight_grams');
+            abort_if($activeShipments->count() + 1 > $courier->max_parcels ||
+                $activeWeight + $weight > $courier->max_weight_grams,
+                422, 'Jumlah atau berat pickup melebihi kapasitas kurir.');
+            $assignmentId = DB::table('pickup_assignments')->insertGetId([
+                'pickup_task_id' => $task->id,
+                'courier_user_id' => $courier->user_id,
+                'assigned_by' => $request->user()->id,
+                'status' => 'PENDING_ACCEPT',
+                'scheduled_at' => $input['scheduled_at'] ?? null,
+                'assigned_at' => now(),
+            ]);
+            DB::table('pickup_tasks')->where('id', $task->id)->update(['status' => 'ASSIGNED']);
+            DB::table('shipments')->where('id', $shipment->id)->update([
+                'status' => 'PICKUP_ASSIGNED', 'updated_at' => now(),
+            ]);
+            $eventId = $this->satria->event($shipment->id, $request->user()->id, 'PICKUP_ASSIGNED', 'PICKUP_ASSIGNED');
+            $this->satria->notifyUser($eventId, $shipment->id, $courier->user_id,
+                'COURIER', 'PICKUP_ASSIGNED', "Tugas pickup baru untuk resi {$shipment->awb}. Buka aplikasi kurir.");
+            $order = DB::table('orders')->where('id', $shipment->order_id)->first();
+            $this->satria->notifyUser($eventId, $shipment->id, $order->seller_user_id,
+                'SELLER', 'PICKUP_SCHEDULED', "Pickup resi {$shipment->awb} sudah dijadwalkan. Siapkan paket di toko.");
+
+            return DB::table('pickup_assignments')->where('id', $assignmentId)->first();
+        });
+
+        return response()->json(['data' => $assignment], 201);
+    }
+
+    public function issueDecision(Request $request, int $hubId, int $issueId): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $hubId);
+        $input = $request->validate([
+            'decision' => ['required', Rule::in(['RESCHEDULE', 'RETURN_TO_SELLER'])],
+            'scheduled_redelivery_at' => ['required_if:decision,RESCHEDULE', 'nullable', 'date', 'after_or_equal:today'],
+            'note' => ['nullable', 'string', 'max:1000'],
+        ]);
+        $issue = DB::transaction(function () use ($request, $hubId, $issueId, $input): object {
+            $issue = DB::table('shipment_issues')->where('id', $issueId)->lockForUpdate()->first();
+            abort_if($issue === null, 404);
+            abort_unless(DB::table('shipments')->where('id', $issue->shipment_id)
+                ->where('delivery_hub_id', $hubId)->exists(), 403, 'Kendala bukan milik hub ini.');
+            if ($issue->status === 'RESOLVED') {
+                abort_unless($issue->decision === $input['decision'], 409, 'Keputusan sudah dibuat.');
+
+                return $issue;
+            }
+            $shipment = DB::table('shipments')->where('id', $issue->shipment_id)->lockForUpdate()->first();
+            abort_unless($shipment->delivery_hub_id === $hubId, 403, 'Kendala bukan milik hub ini.');
+            abort_unless($shipment->status === 'AT_HUB_AWAITING_DECISION' &&
+                $shipment->custody_type === 'HUB', 409, 'Paket harus dikonfirmasi kembali di hub.');
+            $nextStatus = $input['decision'] === 'RESCHEDULE' ? 'WAITING_REDELIVERY' : 'RETURN_REQUESTED';
+            DB::table('shipment_issues')->where('id', $issueId)->update([
+                'status' => 'RESOLVED', 'decision' => $input['decision'],
+                'decision_note' => $input['note'] ?? null,
+                'scheduled_redelivery_at' => $input['scheduled_redelivery_at'] ?? null,
+                'decided_by' => $request->user()->id, 'decided_at' => now(),
+            ]);
+            DB::table('shipments')->where('id', $shipment->id)->update([
+                'status' => $nextStatus, 'updated_at' => now(),
+            ]);
+            $eventType = $input['decision'] === 'RESCHEDULE' ? 'REDELIVERY_SCHEDULED' : 'RETURN_REQUESTED';
+            $eventId = $this->satria->event($shipment->id, $request->user()->id,
+                $eventType, $nextStatus, ['scheduled_at' => $input['scheduled_redelivery_at'] ?? null],
+                $shipment->delivery_hub_id);
+            $order = DB::table('orders')->where('id', $shipment->order_id)->first();
+            $message = $input['decision'] === 'RESCHEDULE'
+                ? "Resi {$shipment->awb} dijadwalkan untuk pengantaran ulang. Pantau status di aplikasi."
+                : "Resi {$shipment->awb} diajukan untuk dikembalikan ke toko.";
+            $this->satria->notifyUser($eventId, $shipment->id, $order->customer_id,
+                'BUYER', $eventType, $message);
+
+            return DB::table('shipment_issues')->where('id', $issueId)->first();
+        });
+
+        return response()->json(['data' => $issue]);
+    }
+
+    public function previewRun(Request $request, int $id): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
+        $input = $request->validate([
+            'zone_id' => ['required', 'integer', 'exists:service_zones,id'],
+            'shipment_ids' => ['required', 'array', 'min:1', 'max:50'],
+            'shipment_ids.*' => ['required', 'integer', 'distinct', 'exists:shipments,id'],
+        ]);
+        abort_unless(DB::table('service_zones')->where('id', $input['zone_id'])
+            ->where('hub_id', $id)->where('active', true)->exists(), 422, 'Zona bukan bagian dari hub aktif.');
+        $shipments = DB::table('shipments')->whereIn('id', $input['shipment_ids'])->get();
+        abort_unless($shipments->count() === count($input['shipment_ids']), 422);
+        foreach ($shipments as $shipment) {
+            abort_unless($shipment->delivery_hub_id === $id
+                && $shipment->delivery_zone_id === $input['zone_id']
+                && $shipment->current_hub_id === $id
+                && $shipment->custody_type === 'HUB'
+                && in_array($shipment->status, ['READY_FOR_LAST_MILE', 'WAITING_REDELIVERY'], true),
+                409, "Resi {$shipment->awb} tidak siap di zona/hub ini.");
+        }
+
+        return response()->json(['data' => $this->stopPlanner->preview($shipments->all(), $id)]);
+    }
+
     public function scanIn(Request $request, int $id): JsonResponse
     {
-        $this->satria->requireHub($request->user(), $id);
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
         $input = $request->validate(['awb' => ['required', 'string']]);
         $shipment = DB::transaction(function () use ($request, $id, $input): object {
             $shipment = DB::table('shipments')->where('awb', $input['awb'])->lockForUpdate()->first();
@@ -114,17 +428,19 @@ class HubOperationsController extends Controller
 
     public function createRun(Request $request, int $id): JsonResponse
     {
-        $this->satria->requireHub($request->user(), $id);
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
         $input = $request->validate([
             'zone_id' => ['required', 'integer', 'exists:service_zones,id'],
             'courier_user_id' => ['required', 'integer', 'exists:courier_profiles,user_id'],
             'shipment_ids' => ['required', 'array', 'min:1', 'max:50'],
             'shipment_ids.*' => ['required', 'integer', 'distinct', 'exists:shipments,id'],
-            'service_date' => ['required', 'date_format:Y-m-d'],
+            'service_date' => ['required', 'date_format:Y-m-d', 'after_or_equal:today'],
             'stop_order' => ['nullable', 'array'],
             'stop_order.*' => ['integer', 'distinct'],
         ]);
-        $result = DB::transaction(function () use ($request, $id, $input): array {
+        $windowStart = '00:00';
+        $windowEnd = '23:59';
+        $result = DB::transaction(function () use ($request, $id, $input, $windowStart, $windowEnd): array {
             $zone = DB::table('service_zones')->where('id', $input['zone_id'])
                 ->where('hub_id', $id)->where('active', true)->first();
             abort_if($zone === null, 422, 'Zona bukan bagian dari hub aktif.');
@@ -134,9 +450,12 @@ class HubOperationsController extends Controller
                 DB::table('users')->where('id', $courier->user_id)->where('active', true)->exists(),
                 422, 'Kurir tidak tersedia di hub ini.');
             abort_if(DB::table('delivery_runs')->where('courier_user_id', $courier->user_id)
-                ->where('service_date', $input['service_date'])
-                ->whereIn('status', ['PENDING_ACCEPT', 'ACCEPTED', 'OUT_FOR_DELIVERY'])->exists(),
-                409, 'Kurir sudah memiliki run aktif pada tanggal tersebut.');
+                ->whereIn('status', ['PENDING_ACCEPT', 'ACCEPTED', 'OUT_FOR_DELIVERY'])
+                ->where(function ($query) use ($input): void {
+                    $query->where('status', 'OUT_FOR_DELIVERY')
+                        ->orWhere('service_date', $input['service_date']);
+                })->exists(),
+                409, 'Kurir sedang mengantar atau sudah memiliki tugas aktif pada tanggal tersebut.');
             abort_unless(DB::table('courier_zones')->where('courier_user_id', $courier->user_id)
                 ->where('zone_id', $zone->id)->where('service_type', 'DELIVERY')->exists(),
                 422, 'Kurir tidak melayani zona pengantaran ini.');
@@ -157,8 +476,9 @@ class HubOperationsController extends Controller
                     $scheduled = DB::table('shipment_issues')->where('shipment_id', $shipment->id)
                         ->where('decision', 'RESCHEDULE')->orderByDesc('id')
                         ->value('scheduled_redelivery_at');
-                    abort_if($scheduled === null || $input['service_date'] < substr($scheduled, 0, 10),
-                        409, 'Tanggal run lebih awal dari jadwal antar ulang.');
+                    abort_if($scheduled === null || $input['service_date'] <
+                        Carbon::parse($scheduled)->timezone('Asia/Jakarta')->toDateString(),
+                        409, 'Tanggal tugas lebih awal dari jadwal antar ulang yang dijanjikan.');
                 }
                 abort_if(DB::table('run_shipments')->where('shipment_id', $shipment->id)
                     ->whereIn('status', ['ASSIGNED', 'HANDED_OVER'])->exists(),
@@ -182,8 +502,10 @@ class HubOperationsController extends Controller
                 'courier_user_id' => $courier->user_id,
                 'assigned_by' => $request->user()->id,
                 'service_date' => $input['service_date'],
+                'window_start' => $windowStart, 'window_end' => $windowEnd,
                 'status' => 'PENDING_ACCEPT', 'assigned_at' => now(),
             ]);
+            $assignmentEventId = null;
             foreach ($orderedIds as $index => $shipmentId) {
                 DB::table('run_shipments')->insert([
                     'run_id' => $runId, 'shipment_id' => $shipmentId,
@@ -196,9 +518,10 @@ class HubOperationsController extends Controller
                 $eventId = $this->satria->event($shipmentId, $request->user()->id,
                     'DELIVERY_ASSIGNED', 'DELIVERY_ASSIGNED',
                     ['run_id' => $runId, 'stop_order' => $index + 1, 'route_strategy' => $strategy], $id);
-                $this->satria->notifyUser($eventId, $shipmentId, $courier->user_id, 'COURIER',
-                    'DELIVERY_ASSIGNED', "Tugas antar baru: {$shipment->awb} pada run #{$runId}. Silakan terima atau tolak.");
+                $assignmentEventId ??= $eventId;
             }
+            $this->satria->notifyUser($assignmentEventId, $orderedIds[0], $courier->user_id, 'COURIER',
+                'DELIVERY_ASSIGNED', "Tugas antar baru pada run #{$runId}. Silakan terima atau tolak.");
 
             return ['run' => DB::table('delivery_runs')->where('id', $runId)->first(), 'strategy' => $strategy];
         });
@@ -210,7 +533,7 @@ class HubOperationsController extends Controller
 
     public function handover(Request $request, int $id): JsonResponse
     {
-        $this->satria->requireHub($request->user(), $id);
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
         $input = $request->validate([
             'run_id' => ['required', 'integer', 'exists:delivery_runs,id'],
             'awbs' => ['required', 'array', 'min:1'],
@@ -220,11 +543,13 @@ class HubOperationsController extends Controller
             $run = DB::table('delivery_runs')->where('id', $input['run_id'])->lockForUpdate()->first();
             abort_unless($run->hub_id === $id, 403);
             abort_unless($run->status === 'ACCEPTED', 409, 'Run harus diterima kurir.');
-            $rows = DB::table('run_shipments')->where('run_id', $run->id)->orderBy('id')->lockForUpdate()->get();
+            $rows = DB::table('run_shipments')->where('run_id', $run->id)
+                ->where('status', 'ASSIGNED')->orderBy('id')->lockForUpdate()->get();
+            abort_unless($rows->isNotEmpty(), 409, 'Tidak ada paket yang diterima kurir.');
             $expected = DB::table('shipments')->whereIn('id', $rows->pluck('shipment_id'))
                 ->pluck('awb')->sort()->values()->all();
             $actual = collect($input['awbs'])->sort()->values()->all();
-            abort_unless($expected === $actual, 422, 'Semua AWB dalam run harus di-scan saat serah terima.');
+            abort_unless($expected === $actual, 422, 'Daftar AWB harus sesuai dengan seluruh paket yang diterima kurir.');
             foreach ($rows as $row) {
                 abort_unless($row->status === 'ASSIGNED', 409, 'Paket sudah diserahterimakan.');
                 DB::table('run_shipments')->where('id', $row->id)->update([
@@ -246,7 +571,7 @@ class HubOperationsController extends Controller
 
     public function returnScan(Request $request, int $id): JsonResponse
     {
-        $this->satria->requireHub($request->user(), $id);
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
         $input = $request->validate(['awb' => ['required', 'string']]);
         $shipment = DB::transaction(function () use ($request, $id, $input): object {
             $shipment = DB::table('shipments')->where('awb', $input['awb'])->lockForUpdate()->first();
@@ -269,7 +594,7 @@ class HubOperationsController extends Controller
             ]);
             $eventId = $this->satria->event($shipment->id, $request->user()->id,
                 'FAILED_PARCEL_RETURNED_TO_HUB', 'AT_HUB_AWAITING_DECISION', [], $id);
-            $this->satria->notifyRoleAtHub($eventId, $shipment->id, 'OPS_ADMIN', null,
+            $this->satria->notifyRoleAtHub($eventId, $shipment->id, 'HUB_OPERATOR', $id,
                 'REDELIVERY_DECISION_REQUIRED',
                 "Paket {$shipment->awb} kembali ke hub. Putuskan jadwal ulang atau retur.");
 

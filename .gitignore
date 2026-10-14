@@ -9,3 +9,10 @@
 **/*.session.enc
 **/coverage/
 **/*.tsbuildinfo
+
+# Generated local OSRM map data and graph files
+routing/data/
+
+# Local automation state and second personal account credentials
+**/.n8n/
+**/.env.courier

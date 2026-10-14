@@ -3,13 +3,55 @@
 namespace App\Services;
 
 use App\Models\User;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 
 class SatriaService
 {
+    public function deliveryCoverage(string $postcode, ?float $latitude = null, ?float $longitude = null): ?object
+    {
+        $candidates = DB::table('postal_coverages as coverage')
+            ->join('hubs as hub', 'hub.id', '=', 'coverage.hub_id')
+            ->join('service_zones as zone', 'zone.id', '=', 'coverage.zone_id')
+            ->where('coverage.postcode', $postcode)
+            ->where('coverage.purpose', 'DELIVERY')
+            ->where('coverage.active', true)
+            ->where('hub.active', true)
+            ->where('zone.active', true)
+            ->orderBy('coverage.id')
+            ->get(['coverage.*', 'hub.name as hub_name', 'hub.latitude as hub_latitude',
+                'hub.longitude as hub_longitude', 'zone.name as zone_name']);
+        if ($candidates->isEmpty()) {
+            return null;
+        }
+
+        $reference = $candidates->first(fn ($candidate) => $candidate->latitude !== null && $candidate->longitude !== null);
+        $targetLatitude = $latitude ?? ($reference ? (float) $reference->latitude : null);
+        $targetLongitude = $longitude ?? ($reference ? (float) $reference->longitude : null);
+        if ($targetLatitude === null || $targetLongitude === null) {
+            return $candidates->first();
+        }
+
+        return $candidates->sort(function ($left, $right) use ($targetLatitude, $targetLongitude): int {
+            $distance = function (object $candidate) use ($targetLatitude, $targetLongitude): float {
+                if ($candidate->hub_latitude === null || $candidate->hub_longitude === null) {
+                    return INF;
+                }
+                $latitudeDelta = deg2rad((float) $candidate->hub_latitude - $targetLatitude);
+                $longitudeDelta = deg2rad((float) $candidate->hub_longitude - $targetLongitude);
+                $haversine = sin($latitudeDelta / 2) ** 2
+                    + cos(deg2rad($targetLatitude)) * cos(deg2rad((float) $candidate->hub_latitude))
+                    * sin($longitudeDelta / 2) ** 2;
+
+                return 6371 * 2 * asin(min(1, sqrt($haversine)));
+            };
+
+            return ($distance($left) <=> $distance($right)) ?: ($left->id <=> $right->id);
+        })->first();
+    }
+
     public function hasRole(User $user, string $role, ?int $hubId = null): bool
     {
         if (! $user->active) {
@@ -55,6 +97,14 @@ class SatriaService
         ]);
     }
 
+    public function telegramLiveAllowed(int $userId): bool
+    {
+        $email = DB::table('users')->where('id', $userId)->value('email');
+
+        return $email !== null && in_array(strtolower((string) $email),
+            config('satria.telegram_live_recipient_emails', []), true);
+    }
+
     public function notifyUser(
         int $eventId,
         int $shipmentId,
@@ -72,16 +122,32 @@ class SatriaService
         $targetId = DB::table('notification_targets')->where('user_id', $userId)
             ->where('channel', 'TELEGRAM')->value('id');
 
+        $phone = (string) DB::table('users')->where('id', $userId)->value('phone');
         $liveLink = DB::table('telegram_links')->where('user_id', $userId)
             ->whereNull('revoked_at')->exists();
-        $mode = config('satria.telegram_mode') === 'LIVE' && $liveLink ? 'LIVE' : 'MOCK';
+        $hasDestination = $liveLink || preg_match('/^(?:\+62|62|0)8[0-9]{8,11}$/', $phone) === 1;
+        $mode = config('satria.telegram_mode') === 'LIVE' && $hasDestination && $this->telegramLiveAllowed($userId)
+            ? 'LIVE' : 'MOCK';
         $webhookUrl = (string) config('satria.n8n_webhook_url', '');
         $status = $mode === 'MOCK' && $webhookUrl === '' ? 'SIMULATED' : 'QUEUED';
         $dedupeKey = hash('sha256', implode(':', [$eventId, $userId, $template]));
         $awb = DB::table('shipments')->where('id', $shipmentId)->value('awb');
-        $actionUrl = $logicalRecipient === 'BUYER'
-            ? rtrim((string) config('satria.ops_public_url'), '/').'/?awb='.rawurlencode($awb)
-            : rtrim((string) config('satria.ops_public_url'), '/').'/';
+        $baseUrl = rtrim((string) config('satria.ops_public_url'), '/');
+        $actionUrl = match ($template) {
+            'DELIVERY_ASSIGNED' => $baseUrl.'/courier-deliveries',
+            'OUT_FOR_DELIVERY', 'REDELIVERY_SCHEDULED' => $baseUrl.'/tracking/'.rawurlencode($awb).'?from='.rawurlencode($awb),
+            default => $logicalRecipient === 'BUYER'
+                ? $baseUrl.'/tracking/'.rawurlencode($awb).'?from='.rawurlencode($awb)
+                : $baseUrl.'/',
+        };
+        $order = DB::table('shipments as shipment')->join('orders as order', 'order.id', '=', 'shipment.order_id')
+            ->where('shipment.id', $shipmentId)->first(['order.recipient_name', 'order.destination_address_snapshot']);
+        $message = match ($template) {
+            'DELIVERY_ASSIGNED' => "📦 Penugasan Pengiriman Baru\n\nHalo, Satria!\n\nAda paket baru yang perlu kamu kirimkan. Silakan cek detail penugasan dan lakukan konfirmasi persetujuan pengiriman melalui tautan berikut:\n\n🔗 Lihat Detail Penugasan: {$actionUrl}\n\nTerima kasih atas kerja samanya. 🙌",
+            'OUT_FOR_DELIVERY' => "Halo, Kak {$order->recipient_name} 👋🏻\n\nKami dari Anteraja akan melakukan proses delivery paket dengan nomor waybill {$awb} ke alamat Anda di {$order->destination_address_snapshot}.\nMohon ditunggu ya,\n\nTerima kasih! 🙏🏻😊",
+            'REDELIVERY_SCHEDULED' => $this->rescheduleMessage($shipmentId, $awb, (string) $order->recipient_name, $actionUrl),
+            default => $message."\nLihat: {$actionUrl}",
+        };
 
         $inserted = DB::table('notifications')->insertOrIgnore([
             'tracking_event_id' => $eventId,
@@ -89,7 +155,7 @@ class SatriaService
             'target_id' => $targetId,
             'logical_recipient' => $logicalRecipient,
             'template_key' => $template,
-            'message_text' => $message."\nLihat: {$actionUrl}",
+            'message_text' => $message,
             'action_url' => $actionUrl,
             'channel' => 'TELEGRAM',
             'delivery_mode' => $mode,
@@ -113,6 +179,23 @@ class SatriaService
                 Log::warning('n8n webhook unavailable', ['id' => $notificationId, 'error' => $exception->getMessage()]);
             }
         });
+    }
+
+    private function rescheduleMessage(int $shipmentId, string $awb, string $recipientName, string $actionUrl): string
+    {
+        $issue = DB::table('shipment_issues as issue')
+            ->join('delivery_attempts as attempt', 'attempt.id', '=', 'issue.delivery_attempt_id')
+            ->where('issue.shipment_id', $shipmentId)->where('issue.decision', 'RESCHEDULE')
+            ->orderByDesc('issue.id')->first(['issue.scheduled_redelivery_at', 'attempt.failure_reason']);
+        $scheduled = $issue?->scheduled_redelivery_at
+            ? Carbon::parse($issue->scheduled_redelivery_at)->timezone('Asia/Jakarta') : null;
+        $date = $scheduled?->translatedFormat('l, d F Y') ?? 'Menunggu konfirmasi hub';
+        $time = $scheduled?->format('H:i').' WIB';
+        $reason = $issue?->failure_reason === 'PENERIMA_TIDAK_ADA'
+            ? 'karena Kakak tidak berada di lokasi saat kurir tiba'
+            : 'karena kendala pada percobaan sebelumnya';
+
+        return "Halo, Kak {$recipientName}! 👋🏻😊\n\nKami dari Anteraja ingin menginformasikan bahwa pengiriman paket dengan nomor resi {$awb} belum berhasil dilakukan {$reason}.\n\nAgar paket dapat segera dikirimkan kembali, kami menyarankan penjadwalan ulang pengiriman pada:\n\n📅 Tanggal: {$date}\n🕒 Waktu: {$time}\n\nApakah jadwal tersebut sesuai untuk Kakak?\n\nSilakan klik tautan berikut untuk melihat detail pengiriman dan mengonfirmasi jadwal pengiriman ulang.\n\n🔗 {$actionUrl}\n\nTerima kasih atas pengertian dan kerja samanya, Kak! 🙏🏻💙\nAnteraja — #PastiBawaHepi";
     }
 
     public function notifyRoleAtHub(
@@ -142,7 +225,7 @@ class SatriaService
             'awb' => $shipment?->awb,
             'shipment_status' => $shipment?->status,
             'tracking_url' => $shipment
-                ? rtrim((string) config('satria.ops_public_url'), '/').'/#tracking?awb='.rawurlencode($shipment->awb)
+                ? rtrim((string) config('satria.ops_public_url'), '/').'/tracking?awb='.rawurlencode($shipment->awb)
                 : null,
         ]);
     }
@@ -151,10 +234,24 @@ class SatriaService
     {
         $order = DB::table('orders')->where('id', $shipment->order_id)->first();
         $zone = DB::table('service_zones')->where('id', $shipment->delivery_zone_id)->first();
+        $coverage = DB::table('postal_coverages')
+            ->where('postcode', $order->destination_postcode)
+            ->where('purpose', 'DELIVERY')
+            ->where('hub_id', $shipment->delivery_hub_id)
+            ->where('zone_id', $shipment->delivery_zone_id)
+            ->where('active', true)->first();
+        $exact = $order->destination_latitude !== null && $order->destination_longitude !== null;
+        $latitude = $exact ? $order->destination_latitude : $coverage?->latitude;
+        $longitude = $exact ? $order->destination_longitude : $coverage?->longitude;
 
         return array_merge((array) $shipment, [
             'order' => $order,
             'delivery_zone' => $zone,
+            'attempt_count' => DB::table('delivery_attempts')->where('shipment_id', $shipment->id)->count(),
+            'destination_point' => $latitude !== null && $longitude !== null
+                ? ['latitude' => (float) $latitude, 'longitude' => (float) $longitude,
+                    'source' => $exact ? 'ADDRESS' : 'POSTCODE']
+                : null,
         ]);
     }
 
@@ -162,15 +259,31 @@ class SatriaService
     {
         $rows = DB::table('run_shipments')->where('run_id', $run->id)
             ->orderBy('stop_order')->get();
-        $shipments = $rows->map(function (object $row): array {
+        $attempts = DB::table('delivery_attempts')->whereIn('run_shipment_id', $rows->pluck('id'))
+            ->get(['run_shipment_id', 'attempt_no', 'result', 'failure_reason', 'notes',
+                'recipient_name', 'attempted_at', 'delivery_photo_ref'])
+            ->keyBy('run_shipment_id');
+        $shipments = $rows->map(function (object $row) use ($attempts): array {
             $shipment = DB::table('shipments')->where('id', $row->shipment_id)->first();
+            $attempt = $attempts->get($row->id);
 
             return array_merge((array) $row, [
                 'shipment' => $this->shipmentPayload($shipment),
+                'delivery_attempt' => $attempt ? [
+                    'attempt_no' => $attempt->attempt_no,
+                    'result' => $attempt->result,
+                    'failure_reason' => $attempt->failure_reason,
+                    'notes' => $attempt->notes,
+                    'recipient_name' => $attempt->recipient_name,
+                    'attempted_at' => $attempt->attempted_at,
+                    'photo_available' => $attempt->delivery_photo_ref !== null,
+                ] : null,
             ]);
         })->toArray();
 
         return array_merge((array) $run, [
+            'hub' => DB::table('hubs')->where('id', $run->hub_id)
+                ->first(['id', 'name', 'address', 'latitude', 'longitude']),
             'zone' => DB::table('service_zones')->where('id', $run->zone_id)->first(),
             'courier' => DB::table('users')->select('id', 'name', 'phone')
                 ->where('id', $run->courier_user_id)->first(),
@@ -182,16 +295,16 @@ class SatriaService
     public function uniqueAwb(): string
     {
         do {
-            $awb = 'SAT'.now()->format('ymd').strtoupper(Str::random(9));
+            $awb = '11'.str_pad((string) random_int(0, 999999999999), 12, '0', STR_PAD_LEFT);
         } while (DB::table('shipments')->where('awb', $awb)->exists());
 
         return $awb;
     }
 
-    public function generateDailyReports(string $date): array
+    public function generateDailyReports(string $date, ?int $hubId = null): array
     {
         $rows = [];
-        foreach (DB::table('hubs')->orderBy('id')->get() as $hub) {
+        foreach (DB::table('hubs')->when($hubId !== null, fn ($query) => $query->where('id', $hubId))->orderBy('id')->get() as $hub) {
             $created = DB::table('shipments')->where('delivery_hub_id', $hub->id)
                 ->whereDate('created_at', $date)->count();
             $delivered = DB::table('shipments')->where('delivery_hub_id', $hub->id)

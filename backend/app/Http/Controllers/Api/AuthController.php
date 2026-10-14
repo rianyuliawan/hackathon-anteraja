@@ -19,11 +19,21 @@ class AuthController extends Controller
         $request->merge(['email' => Str::lower(trim((string) $request->input('email', '')))]);
         $input = $request->validate([
             'name' => ['required', 'string', 'max:160'],
-            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+            'email' => [
+                'required', 'email', 'max:255', 'unique:users,email',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if (DB::table('users')->whereRaw('LOWER(email) = ?', [Str::lower((string) $value)])
+                        ->where('email', '!=', $value)->exists()) {
+                        $fail('Email sudah terdaftar. Silakan masuk dengan akun tersebut.');
+                    }
+                },
+            ],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
             'phone' => ['required', 'string', 'max:30'],
             'default_address' => ['required', 'string', 'max:1000'],
             'default_postcode' => ['required', 'regex:/^[0-9]{5}$/'],
+        ], [
+            'email.unique' => 'Email sudah terdaftar. Silakan masuk dengan akun tersebut.',
         ]);
 
         $user = DB::transaction(function () use ($input): User {

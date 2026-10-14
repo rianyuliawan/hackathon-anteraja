@@ -1,0 +1,137 @@
+{
+  "name": "Satria - Recover pending notifications",
+  "nodes": [
+    {
+      "id": "8e89e1ed-fa37-4027-a5b1-705bc7578001",
+      "name": "Check every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fb4c61f5-cc89-485b-af90-e478b98d8c0e",
+      "name": "Get pending notifications",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "url": "={{$env.SATRIA_API_BASE + '/api/v1/internal/notifications/pending'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.SATRIA_INTERNAL_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "id": "bb2f95f8-39ab-4417-aaed-30ce0dff44ee",
+      "name": "One item per notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const notifications = $input.first().json.notifications ?? [];\nif (!Array.isArray(notifications)) throw new Error('notifications must be an array');\nreturn notifications.filter(item => Number.isSafeInteger(Number(item.id)) && Number(item.id) > 0)\n  .map(item => ({ json: { notification_id: Number(item.id) } }));"
+      }
+    },
+    {
+      "id": "f94beedb-77e2-47d6-af92-6a3c00f52267",
+      "name": "Dispatch through existing webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SATRIA_N8N_WEBHOOK_URL}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Satria-Webhook-Token",
+              "value": "={{$env.SATRIA_WEBHOOK_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({notification_id:$json.notification_id})}}",
+        "options": {
+          "timeout": 10000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Check every minute": {
+      "main": [
+        [
+          {
+            "node": "Get pending notifications",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get pending notifications": {
+      "main": [
+        [
+          {
+            "node": "One item per notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per notification": {
+      "main": [
+        [
+          {
+            "node": "Dispatch through existing webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

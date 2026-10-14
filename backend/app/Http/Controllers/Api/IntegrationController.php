@@ -86,20 +86,31 @@ class IntegrationController extends Controller
 
                 return ['claimed' => false];
             }
+            $deliveryMode = $notification->delivery_mode;
+            if ($deliveryMode === 'LIVE' && ! $this->satria->telegramLiveAllowed((int) $target->user_id)) {
+                $deliveryMode = 'MOCK';
+                DB::table('notifications')->where('id', $id)->update(['delivery_mode' => 'MOCK']);
+            }
             $peerId = null;
-            if ($notification->delivery_mode === 'LIVE') {
+            $phone = null;
+            if ($deliveryMode === 'LIVE') {
                 $link = DB::table('telegram_links')->where('user_id', $target->user_id)
                     ->whereNull('revoked_at')->first();
-                if ($link === null) {
-                    DB::table('notifications')->where('id', $id)->update([
-                        'status' => 'FAILED', 'attempts' => 3,
-                        'last_error' => 'Telegram link revoked.',
-                        'updated_at' => now(),
-                    ]);
+                $peerId = $link ? (string) $link->peer_id : null;
+                if ($peerId === null) {
+                    $storedPhone = (string) DB::table('users')->where('id', $target->user_id)->value('phone');
+                    $digits = preg_replace('/\D/', '', $storedPhone);
+                    $phone = str_starts_with($digits, '0') ? '62'.substr($digits, 1) : $digits;
+                    if (preg_match('/^628[0-9]{8,11}$/', $phone) !== 1) {
+                        DB::table('notifications')->where('id', $id)->update([
+                            'status' => 'FAILED', 'attempts' => 3,
+                            'last_error' => 'Nomor telepon penerima belum valid untuk Telegram.',
+                            'updated_at' => now(),
+                        ]);
 
-                    return ['claimed' => false];
+                        return ['claimed' => false];
+                    }
                 }
-                $peerId = (string) $link->peer_id;
             }
             DB::table('notifications')->where('id', $id)->update([
                 'status' => 'SENDING', 'attempts' => $notification->attempts + 1,
@@ -108,12 +119,13 @@ class IntegrationController extends Controller
 
             return ['claimed' => true, 'notification' => [
                 'id' => $notification->id,
-                'delivery_mode' => $notification->delivery_mode,
+                'delivery_mode' => $deliveryMode,
                 'channel' => $notification->channel,
                 'message' => $notification->message_text,
                 'action_url' => $notification->action_url,
                 'peer_id' => $peerId,
-                'sender_profile' => 'OPS_ADMIN',
+                'phone' => $phone,
+                'sender_profile' => $notification->template_key === 'OUT_FOR_DELIVERY' ? 'COURIER' : 'OPS_ADMIN',
             ]];
         });
 
