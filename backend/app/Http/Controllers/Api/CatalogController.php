@@ -222,20 +222,54 @@ class CatalogController extends Controller
 
         $order = DB::table('orders')->where('id', $shipment->order_id)->first();
         $isCustomer = (int) $order->customer_id === (int) $request->user()->id;
-        $events = DB::table('tracking_events as e')->leftJoin('hubs as h', 'h.id', '=', 'e.hub_id')
+        $events = DB::table('tracking_events as e')
+            ->leftJoin('hubs as h', 'h.id', '=', 'e.hub_id')
+            ->leftJoin('users as actor', 'actor.id', '=', 'e.actor_user_id')
             ->where('e.shipment_id', $shipment->id)
             ->orderBy('e.occurred_at')->orderBy('e.id')
-            ->get(['e.id', 'e.event_type', 'e.status_after', 'e.occurred_at', 'h.name as hub_name']);
+            ->get(['e.id', 'e.event_type', 'e.status_after', 'e.occurred_at', 'e.details',
+                'h.name as hub_name', 'actor.name as actor_name'])
+            ->map(function ($event) use ($isCustomer): array {
+                $details = $isCustomer ? json_decode((string) $event->details, true) : null;
+                $details = is_array($details) ? $details : [];
+                $visibleDetails = [];
+                if ($isCustomer) {
+                    foreach (['reason', 'failure_reason', 'attempt_no', 'scheduled_at'] as $key) {
+                        if (isset($details[$key]) && (is_string($details[$key]) || is_int($details[$key]))) {
+                            $visibleDetails[$key] = $details[$key];
+                        }
+                    }
+                }
+
+                return [
+                    'id' => $event->id,
+                    'event_type' => $event->event_type,
+                    'status_after' => $event->status_after,
+                    'occurred_at' => $event->occurred_at,
+                    'hub_name' => $event->hub_name,
+                    'actor_name' => $isCustomer && in_array($event->event_type, [
+                        'PICKUP_ACCEPTED', 'PICKED_UP', 'DELIVERY_RUN_ACCEPTED',
+                        'DELIVERY_RUN_REJECTED', 'DELIVERY_ASSIGNMENT_REJECTED',
+                        'OUT_FOR_DELIVERY', 'DELIVERED', 'DELIVERY_FAILED',
+                    ], true) ? $event->actor_name : null,
+                    'details' => $visibleDetails,
+                ];
+            });
         $parcel = DB::table('parcels')->where('shipment_id', $shipment->id)
             ->orderBy('parcel_no')->first(['weight_grams', 'length_mm', 'width_mm', 'height_mm']);
         $issue = DB::table('shipment_issues')->where('shipment_id', $shipment->id)
             ->orderByDesc('created_at')->orderByDesc('id')->first();
         $attempt = $issue ? DB::table('delivery_attempts')->where('id', $issue->delivery_attempt_id)
             ->first(['failure_reason', 'attempted_at']) : null;
-        $attempts = $isCustomer ? DB::table('delivery_attempts')
-            ->where('shipment_id', $shipment->id)
-            ->orderBy('attempt_no')
-            ->get(['attempt_no', 'result', 'failure_reason', 'recipient_name', 'attempted_at']) : collect();
+        $attempts = $isCustomer ? DB::table('delivery_attempts as attempt')
+            ->leftJoin('run_shipments as stop', 'stop.id', '=', 'attempt.run_shipment_id')
+            ->leftJoin('delivery_runs as run', 'run.id', '=', 'stop.run_id')
+            ->leftJoin('users as courier', 'courier.id', '=', 'run.courier_user_id')
+            ->where('attempt.shipment_id', $shipment->id)
+            ->orderBy('attempt.attempt_no')
+            ->get(['attempt.attempt_no', 'attempt.result', 'attempt.failure_reason',
+                'attempt.recipient_name', 'attempt.notes', 'attempt.attempted_at',
+                'courier.name as courier_name']) : collect();
         $pickupPhoto = $isCustomer
             ? DB::table('pickup_assignments as a')->join('pickup_tasks as t', 't.id', '=', 'a.pickup_task_id')
                 ->where('t.shipment_id', $shipment->id)->where('a.status', 'COMPLETED')

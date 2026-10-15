@@ -4,7 +4,7 @@ import { FiAlertCircle, FiArrowLeft, FiArrowRight, FiBox, FiCamera, FiCheck, FiC
 import { get, post, unwrap } from '../lib/api';
 import usePrivateImage from '../hooks/usePrivateImage';
 import { PhotoLightbox } from '../components/PhotoLightbox';
-import type { Tracking, TrackingEvent } from '../lib/types';
+import type { Tracking, TrackingAttempt, TrackingEvent } from '../lib/types';
 import { Button, dateTime, Empty, Loading, statusLabel } from '../ui';
 
 export function eventDescription(event: TrackingEvent) {
@@ -12,7 +12,7 @@ export function eventDescription(event: TrackingEvent) {
     AWB_CREATED: 'Resi diterbitkan', AWB_GENERATED: 'Resi diterbitkan dan paket menunggu penjemputan',
     SELLER_READY: 'Paket siap dijemput dari pengirim', PICKUP_ASSIGNED: 'Kurir ditugaskan menjemput paket',
     PICKUP_ACCEPTED: 'Kurir menerima tugas penjemputan', PICKUP_SCHEDULED: 'Penjemputan dijadwalkan',
-    PICKED_UP: 'Paket telah dijemput dari pengirim', ARRIVED_AT_HUB: 'Paket tiba di hub',
+    PICKED_UP: 'Paket telah dijemput dari pengirim', IN_TRANSIT: 'Paket dalam perjalanan menuju hub', ARRIVED_AT_HUB: 'Paket tiba di hub',
     ARRIVED_AT_DELIVERY_HUB: 'Paket tiba di hub tujuan', READY_FOR_LAST_MILE: 'Paket siap diantar ke penerima',
     DELIVERY_RUN_ASSIGNED: 'Kurir pengantaran ditugaskan', DELIVERY_RUN_ACCEPTED: 'Kurir menerima tugas pengantaran',
     DELIVERY_ASSIGNMENT_REJECTED: 'Kurir menolak penugasan paket', DELIVERY_RUN_REJECTED: 'Kurir menolak tugas pengantaran',
@@ -37,6 +37,24 @@ export function failureReasonLabel(reason?: string | null) {
     LAINNYA: 'Kendala lain di lokasi',
   };
   return labels[reason || ''] || reason || 'Alasan belum tersedia';
+}
+
+function courierActivity(event: TrackingEvent): string | null {
+  if (!event.actor_name) return null;
+  if (['PICKUP_ACCEPTED', 'PICKED_UP'].includes(event.event_type)) return `Kurir penjemputan: ${event.actor_name}`;
+  return `Kurir pengantaran: ${event.actor_name}`;
+}
+
+function eventNote(event: TrackingEvent, attempt?: TrackingAttempt): { label: string; value: string } | null {
+  const reason = event.details?.reason;
+  if (reason && ['DELIVERY_ASSIGNMENT_REJECTED', 'DELIVERY_RUN_REJECTED'].includes(event.event_type)) {
+    return { label: 'Catatan penolakan', value: reason };
+  }
+  const failure = event.details?.failure_reason || attempt?.failure_reason;
+  if (failure && event.event_type === 'DELIVERY_FAILED') {
+    return { label: 'Alasan gagal kirim', value: failureReasonLabel(failure) };
+  }
+  return null;
 }
 
 function packageWeight(grams?: number | null) {
@@ -143,7 +161,7 @@ function TrackingDetails({ data, onConfirm, onConfirmReschedule, confirming }: {
           <section className="rounded-[1.5rem] border border-[#f2d9d2] bg-[#fff9ec] p-5 sm:p-6">
             <h2 className="mb-2 flex items-center gap-2 text-base font-bold text-[#854b33]"><FiAlertCircle aria-hidden="true" /> Informasi pengantaran</h2>
             <p className="mb-1 text-sm text-[#6f5e58]">{data.issue.failure_reason ? failureReasonLabel(data.issue.failure_reason) : 'Paket memerlukan tindak lanjut pengantaran.'}</p>
-            {data.issue.scheduled_redelivery_at ? <p className="mb-0 text-sm font-semibold text-[#854b33]">Dijadwalkan ulang: {dateTime(data.issue.scheduled_redelivery_at)}</p> : null}
+            {data.issue.scheduled_redelivery_at ? <p className="mb-0 text-sm font-semibold text-[#854b33]">Dijadwalkan ulang: {dateTime(data.issue.scheduled_redelivery_at)} WIB</p> : null}
             {data.is_customer && data.issue.decision === 'RESCHEDULE' && data.status === 'WAITING_REDELIVERY' ? (
               data.issue.reschedule_confirmed
                 ? <p className="mt-3 flex items-center gap-2 text-sm font-semibold text-[#248359]"><FiCheckCircle size={18} /> Jadwal pengantaran ulang sudah dikonfirmasi.</p>
@@ -163,7 +181,9 @@ function TrackingDetails({ data, onConfirm, onConfirmReschedule, confirming }: {
               {data.attempts.map((attempt) => <li key={attempt.attempt_no} className={`rounded-2xl border p-4 ${attempt.result === 'DELIVERED' ? 'border-[#c9ead6] bg-[#f4fcf7]' : 'border-[#f3dfc4] bg-[#fffbf2]'}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm text-[#3d3039]">Percobaan ke-{attempt.attempt_no}</strong><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${attempt.result === 'DELIVERED' ? 'bg-[#dff5e8] text-[#207449]' : 'bg-[#fff0d5] text-[#9c6229]'}`}>{attempt.result === 'DELIVERED' ? 'Berhasil diantar' : 'Belum berhasil'}</span></div>
                 <p className="mb-1 mt-2 text-sm leading-6 text-[#5f505b]">{attempt.result === 'DELIVERED' ? `Diterima oleh ${attempt.recipient_name || 'penerima'}` : failureReasonLabel(attempt.failure_reason)}</p>
-                <time className="text-xs text-[#8b7c86]">{dateTime(attempt.attempted_at)} WIB</time>
+                {attempt.courier_name ? <p className="mb-1 text-xs font-semibold text-[#6d5a68]">Kurir: {attempt.courier_name}</p> : null}
+                {attempt.notes ? <p className="mb-2 rounded-xl bg-white/80 px-3 py-2 text-xs leading-5 text-[#765868]"><strong>Catatan kurir:</strong> {attempt.notes}</p> : null}
+                <time dateTime={attempt.attempted_at} className="text-xs font-medium text-[#8b7c86]">{dateTime(attempt.attempted_at)} WIB</time>
               </li>)}
             </ol>
           </section>
@@ -197,16 +217,24 @@ function TrackingDetails({ data, onConfirm, onConfirmReschedule, confirming }: {
         </div>
         {events.length ? (
           <ol className="relative ml-3 border-l-2 border-[#f4d8e7]">
-            {events.map((event, index) => (
-              <li key={event.id || `${event.event_type}-${event.occurred_at}-${index}`} className="relative pb-7 pl-7 last:pb-0">
+            {events.map((event, index) => {
+              const attempt = data.attempts?.find((item) => item.attempt_no === event.details?.attempt_no);
+              const note = eventNote(event, attempt);
+              const courier = courierActivity(event);
+              return <li key={event.id || `${event.event_type}-${event.occurred_at}-${index}`} className="relative pb-6 pl-7 last:pb-0">
                 <span className={`absolute -left-[17px] top-0 flex h-8 w-8 items-center justify-center rounded-full border-4 border-white ${index === 0 ? 'bg-[#ec1688] text-white' : 'bg-[#eff0f2] text-[#87918f]'}`}><FiCheck size={15} aria-hidden="true" /></span>
-                <div className={index === 0 ? 'rounded-xl bg-[#fff1f7] p-3' : ''}>
+                <div className={`rounded-2xl border px-3 py-3 sm:px-4 ${index === 0 ? 'border-[#f4cddd] bg-[#fff1f7]' : 'border-[#f1e8ed] bg-white'}`}>
                   <strong className={`block text-sm leading-5 ${index === 0 ? 'text-[#b91f70]' : 'text-[#453943]'}`}>{eventDescription(event)}</strong>
                   {event.hub_name || event.location ? <p className="mb-0 mt-1 text-xs text-[#817580]">{event.hub_name || event.location}</p> : null}
-                  <time className="mt-1 block text-xs text-[#988b96]">{dateTime(event.occurred_at)}</time>
+                  {courier ? <p className="mb-0 mt-1 text-xs font-semibold text-[#65515e]">{courier}</p> : null}
+                  {event.details?.attempt_no ? <p className="mb-0 mt-1 text-xs text-[#817580]">Percobaan pengantaran ke-{event.details.attempt_no}</p> : null}
+                  {note ? <p className="mb-0 mt-2 rounded-xl bg-[#fff8e9] px-3 py-2 text-xs leading-5 text-[#7e553e]"><strong>{note.label}:</strong> {note.value}</p> : null}
+                  {event.event_type === 'DELIVERY_FAILED' && attempt?.notes ? <p className="mb-0 mt-2 text-xs leading-5 text-[#765868]"><strong>Catatan kurir:</strong> {attempt.notes}</p> : null}
+                  {event.event_type === 'REDELIVERY_SCHEDULED' && event.details?.scheduled_at ? <p className="mb-0 mt-2 text-xs font-semibold text-[#8e4c6d]">Jadwal berikutnya: {dateTime(event.details.scheduled_at)} WIB</p> : null}
+                  <time dateTime={event.occurred_at} className="mt-2 block text-xs font-semibold text-[#887783]">{dateTime(event.occurred_at)} WIB</time>
                 </div>
-              </li>
-            ))}
+              </li>;
+            })}
           </ol>
         ) : <Empty icon="clock" title="Belum ada pembaruan" detail="Riwayat paket akan muncul setelah status berubah." />}
       </section>
@@ -312,7 +340,7 @@ export function TrackingDetailPage({ awb, searchAwbs, toast }: { awb: string; se
               <div className="min-w-0"><span className="mb-0.5 block text-[11px] font-semibold text-[#907d8c]">Nomor resi</span><strong className="block break-all font-mono text-base tracking-[.04em] sm:text-lg">{awb}</strong></div>
               <button type="button" onClick={copyAwb} disabled={!data} aria-label="Salin nomor resi" className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#fff0f7] text-[#c21d73] transition hover:bg-[#ffe0ee] disabled:opacity-50"><FiCopy size={18} aria-hidden="true" /></button>
             </div>
-            {data ? <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 font-bold text-[#b91e6d]"><FiCheckCircle size={14} aria-hidden="true" />{statusLabel(data.status)}</span><span className="text-white/90">Diperbarui {dateTime(data.latest_update)}</span><button type="button" onClick={() => setRetry((current) => current + 1)} disabled={loading} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/60 bg-white/15 px-3 font-bold text-white hover:bg-white/25 disabled:opacity-60"><FiRefreshCw size={15} aria-hidden="true" />Perbarui status</button></div> : null}
+            {data ? <div className="mt-4 flex flex-wrap items-center gap-2 text-xs"><span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 font-bold text-[#b91e6d]"><FiCheckCircle size={14} aria-hidden="true" />{statusLabel(data.status)}</span><span className="text-white/90">Diperbarui {dateTime(data.latest_update)} WIB</span><button type="button" onClick={() => setRetry((current) => current + 1)} disabled={loading} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/60 bg-white/15 px-3 font-bold text-white hover:bg-white/25 disabled:opacity-60"><FiRefreshCw size={15} aria-hidden="true" />Perbarui status</button></div> : null}
           </div>
           <div aria-hidden="true" className="hidden h-28 w-28 -rotate-6 items-center justify-center rounded-[1.8rem] border-4 border-white/90 bg-[#ffcd48] text-[#d41475] shadow-xl sm:flex"><FiBox size={54} /></div>
         </div>

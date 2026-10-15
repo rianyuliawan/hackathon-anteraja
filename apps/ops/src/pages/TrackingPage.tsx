@@ -172,7 +172,7 @@ export function TrackingPage({ awb = '' }: { awb?: string }) {
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             {previews.map(({ awb: number, preview }) => preview && (
-              <article key={number} className="flex flex-col rounded-[1.4rem] border border-[#f0e2e9] bg-white p-5 shadow-[0_10px_30px_rgba(109,38,74,.05)] sm:p-6">
+              <Link key={number} to={`/tracking/${encodeURIComponent(number)}?from=${encodeURIComponent(awb)}`} aria-label={`Lihat detail paket ${number}`} className="group flex flex-col rounded-[1.4rem] border border-[#f0e2e9] bg-white p-5 shadow-[0_10px_30px_rgba(109,38,74,.05)] transition duration-200 hover:-translate-y-1 hover:border-[#e99bc2] hover:shadow-[0_16px_36px_rgba(109,38,74,.12)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ec1688] motion-reduce:transform-none sm:p-6">
                 <div className="mb-4 flex items-start justify-between gap-3">
                   <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#fff0f7] text-[#d6237e]"><FiBox size={22} /></span>
                   <Badge status={preview.status} />
@@ -184,11 +184,11 @@ export function TrackingPage({ awb = '' }: { awb?: string }) {
                   <FiArrowRight className="mt-3 text-[#cf9d3f]" aria-hidden="true" />
                   <div className="min-w-0"><span className="block text-[#8b7c71]">Ke</span><strong className="mt-1 block text-[#463741]">{preview.destination || 'Tujuan'}</strong></div>
                 </div>
-                <p className="mb-4 mt-3 text-xs text-[#897b88]">Pembaruan terakhir: {dateTime(preview.latest_update)}</p>
-                <Link to={`/tracking/${encodeURIComponent(number)}?from=${encodeURIComponent(awb)}`} className="mt-auto flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#ec1688] px-4 text-sm font-bold text-white transition hover:bg-[#c91470] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#ec1688]">
+                <p className="mb-4 mt-3 text-xs text-[#897b88]">Pembaruan terakhir: {dateTime(preview.latest_update)} WIB</p>
+                <span className="mt-auto flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#ec1688] px-4 text-sm font-bold text-white transition group-hover:bg-[#c91470]">
                   Detail paket <FiArrowRight size={17} aria-hidden="true" />
-                </Link>
-              </article>
+                </span>
+              </Link>
             ))}
           </div>
         </section>

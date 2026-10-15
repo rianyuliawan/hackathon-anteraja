@@ -322,7 +322,9 @@ class SatriaFlowTest extends TestCase
             ->assertJsonPath('data.proof_available', false)
             ->assertJsonPath('data.pickup_photo_available', false)
             ->assertJsonPath('data.pickup_photo_taken_at', null)
-            ->assertJsonPath('data.delivery_photo_taken_at', null);
+            ->assertJsonPath('data.delivery_photo_taken_at', null)
+            ->assertJsonPath('data.events.0.actor_name', null)
+            ->assertJsonPath('data.events.0.details', []);
         $this->actingAs($otherUser)->get("/api/v1/tracking/{$awb}/pickup-photo")
             ->assertForbidden();
         $this->actingAs($otherUser)->get("/api/v1/tracking/{$awb}/delivery-photo")
@@ -558,7 +560,15 @@ class SatriaFlowTest extends TestCase
         $firstRunShipmentId = DB::table('run_shipments')->where('run_id', $run['id'])->value('id');
         $this->actingAs($deliveryCourier)->postJson("/api/v1/courier/run-shipments/{$firstRunShipmentId}/result", [
             'result' => 'FAILED', 'failure_reason' => 'PENERIMA_TIDAK_ADA',
+            'notes' => 'Penerima belum ada di lokasi saat kurir tiba.',
         ])->assertOk()->assertJsonPath('data.attempt_no', 1);
+        $tracking = $this->actingAs($buyer)->getJson("/api/v1/tracking/{$shipment->awb}")
+            ->assertOk()->assertJsonPath('data.attempts.0.courier_name', $deliveryCourier->name)
+            ->assertJsonPath('data.attempts.0.notes', 'Penerima belum ada di lokasi saat kurir tiba.')
+            ->json('data');
+        $failureEvent = collect($tracking['events'])->firstWhere('event_type', 'DELIVERY_FAILED');
+        $this->assertSame($deliveryCourier->name, $failureEvent['actor_name']);
+        $this->assertSame('PENERIMA_TIDAK_ADA', $failureEvent['details']['failure_reason']);
         $failedCount = $this->actingAs($hubOperator)->getJson($attentionUrl)
             ->assertOk()->json('data.failed_needs_return');
         $this->assertGreaterThan(0, $failedCount);
@@ -887,6 +897,15 @@ class SatriaFlowTest extends TestCase
         $this->assertSame('READY_FOR_LAST_MILE', DB::table('shipments')->where('id', $rejected->id)->value('status'));
         $this->assertSame('Kapasitas kendaraan penuh', DB::table('run_shipments')
             ->where('run_id', $run['id'])->where('shipment_id', $rejected->id)->value('rejection_reason'));
+        $buyerId = DB::table('orders')->where('id', $rejected->order_id)->value('customer_id');
+        $tracking = $this->actingAs(User::findOrFail($buyerId))
+            ->getJson("/api/v1/tracking/{$rejected->awb}")->assertOk()->json('data');
+        $rejectionEvent = collect($tracking['events'])->firstWhere('event_type', 'DELIVERY_ASSIGNMENT_REJECTED');
+        $this->assertSame('Kapasitas kendaraan penuh', $rejectionEvent['details']['reason']);
+        $this->assertSame($courier->name, $rejectionEvent['actor_name']);
+        $this->actingAs($otherCourier)->getJson("/api/v1/tracking/{$rejected->awb}")
+            ->assertOk()->assertJsonCount(0, 'data.attempts')
+            ->assertJsonMissing(['actor_name' => $courier->name]);
         $this->actingAs($operator)->getJson("/api/v1/hubs/{$hubId}/ready")
             ->assertOk()->assertJsonFragment(['awb' => $rejected->awb]);
         $acceptedAwbs = $shipments->take(2)->pluck('awb')->all();

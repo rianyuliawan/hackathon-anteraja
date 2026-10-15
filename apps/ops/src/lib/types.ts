@@ -278,7 +278,13 @@ export interface TrackingEvent {
   occurred_at: string;
   hub?: Hub;
   hub_name?: string;
-  details?: Record<string, unknown>;
+  actor_name?: string | null;
+  details?: {
+    reason?: string;
+    failure_reason?: string;
+    attempt_no?: number;
+    scheduled_at?: string;
+  };
 }
 
 export interface TrackingPreview {
@@ -294,6 +300,8 @@ export interface TrackingAttempt {
   result: 'DELIVERED' | 'FAILED';
   failure_reason?: string | null;
   recipient_name?: string | null;
+  notes?: string | null;
+  courier_name?: string | null;
   attempted_at: string;
 }
 
