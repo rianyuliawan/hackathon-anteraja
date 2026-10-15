@@ -8,7 +8,7 @@ Siapkan PostgreSQL, jalankan migrasi/seed dan server Laravel. Lihat [alur dan ar
 
 ```bash
 cp .env.example .env
-npm install
+npm ci
 npm run dev
 ```
 
@@ -35,6 +35,6 @@ Login tersedia di `/masuk`. Pendaftaran pembeli tersedia di halaman `/daftar` An
 
 ## PWA dan batas offline
 
-Portal dapat dipasang dari tombol **Pasang aplikasi** di halaman masuk, header, atau menu aplikasi. Pada Chrome/Edge, browser dapat menampilkan dialog instalasi; pada Safari iPhone/iPad, gunakan **Bagikan → Tambahkan ke Layar Utama**. Tombol menampilkan petunjuk jika dialog tidak tersedia. Gunakan HTTPS untuk mengakses dari ponsel; `localhost` hanya berlaku pada perangkat yang menjalankan server. Manifest, ikon, dan service worker menyediakan shell antarmuka ketika koneksi terputus. Permintaan API, autentikasi, data paket pribadi, dan foto **tidak** disimpan offline; scan, penugasan, dan bukti foto membutuhkan koneksi sebelum bisa dikirim. Foto pickup contoh dipasang otomatis pada saat konfirmasi pickup; gunakan kamera ponsel untuk bukti pengantaran nyata dan pastikan hasil unggahan tercatat sebelum berpindah tugas. Fitur install bergantung pada dukungan dan kriteria browser.
+Portal dapat dipasang dari tombol **Pasang aplikasi** di halaman masuk atau menu aplikasi. Pada Chrome/Edge, browser dapat menampilkan dialog instalasi; pada Safari iPhone/iPad, gunakan **Bagikan → Tambahkan ke Layar Utama**. Tombol menampilkan petunjuk jika dialog tidak tersedia. Gunakan HTTPS untuk mengakses dari ponsel; `localhost` hanya berlaku pada perangkat yang menjalankan server. Manifest, ikon, dan service worker menyediakan shell antarmuka ketika koneksi terputus. Permintaan API, autentikasi, data paket pribadi, dan foto **tidak** disimpan offline; scan, penugasan, dan bukti foto membutuhkan koneksi sebelum bisa dikirim. Foto pickup contoh dipasang otomatis pada saat konfirmasi pickup; gunakan kamera ponsel untuk bukti pengantaran nyata dan pastikan hasil unggahan tercatat sebelum berpindah tugas. Fitur install bergantung pada dukungan dan kriteria browser.
 
 Kontak Telegram dibuat melalui persetujuan dan pairing akun pembeli pada backend. Nomor telepon tidak otomatis menjadi identitas Telegram. Tautan kontak dan catatan komunikasi menggunakan API yang sama; aplikasi ini tidak mengirim chat langsung dari browser.

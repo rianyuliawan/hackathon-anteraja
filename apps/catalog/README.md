@@ -4,14 +4,15 @@ Fashionaja adalah aplikasi katalog pakaian. Frontend memakai React, TypeScript, 
 
 ## Menjalankan lokal
 
-Jalankan backend Laravel terlebih dahulu di `http://localhost:8000`, lalu dari folder ini:
+Jalankan backend Laravel terlebih dahulu di `http://127.0.0.1:8000`, lalu dari folder ini:
 
 ```bash
-npm install
+cp .env.example .env
+npm ci
 npm run dev
 ```
 
-Katalog tersedia di `http://localhost:5173`. Vite mem-proxy API, login, register, logout, dan CSRF ke Laravel. Halaman masuk berada di `/masuk`, halaman daftar di `/daftar`; katalog `/`, pesanan `/pesanan`, checkout `/checkout`, dan profil `/akun`. Backend Laravel perlu berjalan agar login dan data katalog dapat dimuat. `npm run build` menghasilkan berkas produksi.
+Katalog tersedia di `http://localhost:5173`. Vite mem-proxy API, login, register, logout, dan CSRF ke Laravel. Bila backend memakai port lain, ubah `VITE_PROXY_TARGET` di `.env`. Halaman masuk berada di `/masuk`, halaman daftar di `/daftar`; katalog `/`, pesanan `/pesanan`, checkout `/checkout`, dan profil `/akun`. Backend Laravel perlu berjalan agar login dan data katalog dapat dimuat. `npm run build` menghasilkan berkas produksi.
 
 ## Struktur frontend
 
@@ -27,4 +28,4 @@ Keranjang tersimpan di `localStorage`; pesanan, riwayat, akun, dan resi tersimpa
 
 ## Pasang sebagai aplikasi
 
-Buka Fashionaja di browser, lalu tekan **Pasang aplikasi** pada halaman masuk atau di kanan atas katalog. Pada Chrome/Edge, browser dapat menampilkan dialog instalasi. Pada iPhone/iPad, gunakan menu **Bagikan → Tambahkan ke Layar Utama** di Safari; pada Android, gunakan **Instal aplikasi** atau **Tambahkan ke layar utama** dari menu Chrome. Tombol yang sama menampilkan petunjuk jika dialog instalasi tidak tersedia. Gunakan HTTPS saat membuka dari ponsel; `localhost` hanya berlaku pada perangkat yang menjalankan server.
+Buka Fashionaja di browser, lalu tekan **Pasang aplikasi** pada halaman masuk atau di halaman akun setelah masuk. Pada Chrome/Edge, browser dapat menampilkan dialog instalasi. Pada iPhone/iPad, gunakan menu **Bagikan → Tambahkan ke Layar Utama** di Safari; pada Android, gunakan **Instal aplikasi** atau **Tambahkan ke layar utama** dari menu Chrome. Tombol yang sama menampilkan petunjuk jika dialog instalasi tidak tersedia. Gunakan HTTPS saat membuka dari ponsel; `localhost` hanya berlaku pada perangkat yang menjalankan server.
