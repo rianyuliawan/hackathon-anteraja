@@ -43,7 +43,7 @@ export function Profile({
       <div className="page-heading">
         <span className="eyebrow dark">AKUN FASHIONAJA</span>
         <h1>Profil saya</h1>
-        <p>Data ini membantu mengisi formulir checkout berikutnya.</p>
+        <p>Data ini akan digunakan saat Anda membuat pesanan berikutnya.</p>
       </div>
       <div className="mx-auto max-w-2xl">
         <form className="surface-card profile-card" onSubmit={save}>
@@ -79,7 +79,7 @@ export function Profile({
               />
             </label>
             <label className="wide">
-              Alamat default
+              Alamat utama
               <textarea
                 required
                 rows={4}

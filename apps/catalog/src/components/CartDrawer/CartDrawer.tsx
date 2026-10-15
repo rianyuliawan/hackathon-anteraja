@@ -97,13 +97,13 @@ export function CartDrawer({
             <span>Subtotal</span>
             <strong>{money(total)}</strong>
           </div>
-          <p>Periksa kembali pilihan Anda sebelum checkout.</p>
+          <p>Periksa kembali pilihan Anda sebelum membuat pesanan.</p>
           <button
             className="button button-primary full-width"
             onClick={checkout}
             disabled={!items.length}
           >
-            Lanjut ke checkout <Icon name="arrow" size={18} />
+            Lanjutkan pesanan <Icon name="arrow" size={18} />
           </button>
         </div>
       </aside>

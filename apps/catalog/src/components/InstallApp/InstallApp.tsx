@@ -48,9 +48,9 @@ export default function InstallApp({ canPrompt, installed, install, iconOnlyMobi
           <div><p className="mb-1 text-xs font-extrabold tracking-widest text-[#a34d66] uppercase">Fashionaja</p><h2 id="fashionaja-install-title" className="text-xl font-extrabold text-[#392137]">Pasang di perangkat</h2></div>
           <button className="grid size-9 shrink-0 place-items-center rounded-full text-[#80717c] hover:bg-[#f6e8e8]" type="button" onClick={() => setShowHelp(false)} aria-label="Tutup petunjuk"><FiX size={20}/></button>
         </div>
-        <p className="mt-4 text-sm leading-6 text-[#6c5d6a]">Fashionaja dapat dipasang langsung dari browser. Tidak perlu mengunduh APK.</p>
+        <p className="mt-4 text-sm leading-6 text-[#6c5d6a]">Pasang Fashionaja di layar utama untuk membuka katalog dengan lebih mudah.</p>
         <div className="mt-5 flex gap-3 rounded-xl bg-[#f8e8e5] p-4 text-sm leading-6 text-[#4f3b4b]">{instructions()}</div>
-        <p className="mt-4 text-xs leading-5 text-[#817480]">Gunakan HTTPS saat membuka dari ponsel. Alamat localhost hanya dapat dipasang pada perangkat yang menjalankannya.</p>
+        <p className="mt-4 text-xs leading-5 text-[#817480]">Jika pilihan pemasangan belum muncul, buka halaman ini melalui browser utama di perangkat Anda.</p>
       </section>
     </div> : null}
   </>;

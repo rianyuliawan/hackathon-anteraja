@@ -4,7 +4,7 @@ import Icon from "../Icon";
 const benefits = [
   {
     icon: "shield" as const,
-    title: "Checkout jelas",
+    title: "Proses pesanan jelas",
     detail: "Alamat bisa dikonfirmasi",
   },
   {
@@ -15,7 +15,7 @@ const benefits = [
   {
     icon: "check" as const,
     title: "Pesan dengan mudah",
-    detail: "Checkout dalam beberapa langkah",
+    detail: "Selesaikan pesanan dalam beberapa langkah",
   },
 ];
 

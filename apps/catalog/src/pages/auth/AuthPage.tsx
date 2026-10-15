@@ -86,7 +86,7 @@ export default function AuthPage({
           <Brand light />
           <div className="hidden max-w-lg lg:block">
             <span className="text-xs font-extrabold uppercase tracking-[.22em] text-[#ffc0af]">
-              Curated for every day
+              Pilihan untuk setiap hari
             </span>
             <h1 className="mt-5 text-5xl font-extrabold leading-[1.12] tracking-[-.06em] text-white xl:text-6xl">
               {register

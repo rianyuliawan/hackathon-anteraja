@@ -43,7 +43,7 @@ export function Checkout({
         <div className="state-box">
           <Icon name="bag" size={36} />
           <h3>Keranjang masih kosong</h3>
-          <p>Pilih baju sebelum melanjutkan ke checkout.</p>
+          <p>Pilih baju sebelum membuat pesanan.</p>
           <button className="button button-primary" onClick={back}>
             Lihat koleksi
           </button>
@@ -130,7 +130,7 @@ export function Checkout({
             <Icon name="phone" size={18} />
             <p>
               Pastikan nama, nomor telepon, dan alamat sudah benar sebelum
-              checkout.
+              membuat pesanan.
             </p>
           </div>
           {error && (

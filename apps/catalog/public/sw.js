@@ -1,13 +1,14 @@
-const CACHE = 'fashionaja-shell-v4'
-const SHELL = ['/', '/index.html', '/icon-48.png', '/images/fashionaja-symbol.png', '/images/login.webp', '/images/register.webp', '/images/tee.webp', '/images/shirt.webp', '/images/hoodie.webp', '/images/jacket.webp', '/icon-192.png', '/icon-512.png']
+const CACHE = 'fashionaja-shell-v6'
+const OPTIONAL_SHELL = ['/manifest.webmanifest', '/icon-48.png', '/images/fashionaja-symbol.png', '/images/login.webp', '/images/register.webp', '/images/tee.webp', '/images/shirt.webp', '/images/hoodie.webp', '/images/jacket.webp', '/icon-192.png', '/icon-512.png']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then(async (cache) => {
-    await cache.addAll(SHELL)
+    await cache.addAll(['/', '/index.html'])
+    await Promise.allSettled(OPTIONAL_SHELL.map((url) => cache.add(url)))
     const response = await fetch('/index.html')
     const html = await response.text()
     const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((match) => match[1])
-    if (assets.length) await cache.addAll(assets)
+    await Promise.allSettled(assets.map((url) => cache.add(url)))
   }).then(() => self.skipWaiting()))
 })
 

@@ -13,7 +13,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
-  window.addEventListener("load", () =>
-    navigator.serviceWorker.register("/sw.js").catch(() => undefined),
-  );
+  const registerServiceWorker = () => {
+    void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  };
+  if (document.readyState === "complete") registerServiceWorker();
+  else window.addEventListener("load", registerServiceWorker, { once: true });
 }

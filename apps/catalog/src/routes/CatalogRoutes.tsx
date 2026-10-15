@@ -212,7 +212,7 @@ function CatalogShell() {
       <div className="grid min-h-screen place-content-center gap-5 bg-[#fffaf7] text-center">
         <Brand />
         <span className="mx-auto size-7 animate-spin rounded-full border-[3px] border-[#ead9db] border-t-[#392137]" />
-        <p className="text-sm text-[#82737d]">Menyiapkan Fashionaja...</p>
+        <p className="text-sm text-[#82737d]">Menyiapkan Fashionaja…</p>
       </div>
     );
   if (!user)
