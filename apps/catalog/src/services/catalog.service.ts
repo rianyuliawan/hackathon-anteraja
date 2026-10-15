@@ -155,7 +155,7 @@ export const api = {
     return unwrap<Order>(
       await request("/api/v1/orders", {
         method: "POST",
-
+        
         body: JSON.stringify(input),
       }),
     );
@@ -163,7 +163,7 @@ export const api = {
   async updateProfile(input: Partial<Buyer>): Promise<Buyer> {
     await request("/api/v1/me", {
       method: "PATCH",
-
+      
       body: JSON.stringify(input),
     });
     return api.me();

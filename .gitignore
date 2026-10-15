@@ -16,7 +16,3 @@ routing/data/
 # Local automation state and second personal account credentials
 **/.n8n/
 **/.env.courier
-
-# Local tooling state
-.commandcode/
-.vscode/
