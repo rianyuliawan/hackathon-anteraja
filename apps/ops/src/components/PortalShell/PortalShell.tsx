@@ -7,7 +7,7 @@ import { get, list, unwrap } from '../../lib/api';
 import { allowedHubId, type DashboardData, type DeliveryRun, type PickupAssignment, type Role, type User } from '../../lib/types';
 import { menu } from '../../utils/navigation';
 
-type HubAttentionCounts = { pickup_needs_assignment: number; inbound_needs_scan: number };
+type HubAttentionCounts = { pickup_needs_assignment: number; inbound_needs_scan: number; delivery_needs_assignment: number; handover_needs_confirmation: number; failed_needs_return: number; returned_needs_decision: number };
 
 type Props = {
   user: User;
@@ -20,7 +20,7 @@ type Props = {
 };
 
 const roleLabels: Record<Role, string> = {
-  OPS_ADMIN: 'Ops admin',
+  OPS_ADMIN: 'Admin operasional',
   HUB_OPERATOR: 'Operator hub',
   COURIER: 'Kurir',
   BUYER: 'Pelanggan',
@@ -33,7 +33,7 @@ export default function PortalShell({ user, role, page, title, children, onLogou
   const [hubAttention, setHubAttention] = useState<HubAttentionCounts | null>(null);
   const [courierAttention, setCourierAttention] = useState<{ pickup: number; delivery: number } | null>(null);
   const hubId = allowedHubId(user);
-  const links = menu[role].filter((item) => item.hash !== 'tracking' || role === 'BUYER');
+  const links = menu[role];
   const roleLabel = roleLabels[role];
 
   useEffect(() => setMenuOpen(false), [page]);
@@ -47,10 +47,9 @@ export default function PortalShell({ user, role, page, title, children, onLogou
         .catch(() => { if (active) setPendingOrders(null); });
     };
     refreshCount();
-    const interval = window.setInterval(refreshCount, 30_000);
     window.addEventListener('ops:orders-updated', refreshCount);
     document.addEventListener('visibilitychange', refreshCount);
-    return () => { active = false; window.clearInterval(interval); window.removeEventListener('ops:orders-updated', refreshCount); document.removeEventListener('visibilitychange', refreshCount); };
+    return () => { active = false; window.removeEventListener('ops:orders-updated', refreshCount); document.removeEventListener('visibilitychange', refreshCount); };
   }, [role]);
 
   useEffect(() => {
@@ -66,12 +65,10 @@ export default function PortalShell({ user, role, page, title, children, onLogou
         .catch(() => { if (active) setHubAttention(null); });
     };
     refreshCount();
-    const interval = window.setInterval(refreshCount, 30_000);
     window.addEventListener('hub:work-updated', refreshCount);
     document.addEventListener('visibilitychange', refreshCount);
     return () => {
       active = false;
-      window.clearInterval(interval);
       window.removeEventListener('hub:work-updated', refreshCount);
       document.removeEventListener('visibilitychange', refreshCount);
     };
@@ -94,14 +91,13 @@ export default function PortalShell({ user, role, page, title, children, onLogou
       }).catch(() => { if (active) setCourierAttention(null); });
     };
     refreshCount();
-    const interval = window.setInterval(refreshCount, 30_000);
     window.addEventListener('courier:work-updated', refreshCount);
     document.addEventListener('visibilitychange', refreshCount);
-    return () => { active = false; window.clearInterval(interval); window.removeEventListener('courier:work-updated', refreshCount); document.removeEventListener('visibilitychange', refreshCount); };
+    return () => { active = false; window.removeEventListener('courier:work-updated', refreshCount); document.removeEventListener('visibilitychange', refreshCount); };
   }, [role]);
 
   const hubPending = role === 'HUB_OPERATOR' && hubAttention
-    ? hubAttention.pickup_needs_assignment + hubAttention.inbound_needs_scan : 0;
+    ? Object.values(hubAttention).reduce((total, count) => total + Number(count || 0), 0) : 0;
 
   return (
     <div className="app-shell min-h-screen bg-[#f7f7f9]">
@@ -115,12 +111,16 @@ export default function PortalShell({ user, role, page, title, children, onLogou
             const count = role === 'OPS_ADMIN' && item.hash === 'admin-orders' ? pendingOrders
               : role === 'HUB_OPERATOR' && item.hash === 'hub-pickups' ? hubAttention?.pickup_needs_assignment
               : role === 'HUB_OPERATOR' && item.hash === 'hub-inbound' ? hubAttention?.inbound_needs_scan
+              : role === 'HUB_OPERATOR' && item.hash === 'hub-dispatch' ? ((hubAttention?.delivery_needs_assignment || 0) + (hubAttention?.handover_needs_confirmation || 0))
+              : role === 'HUB_OPERATOR' && item.hash === 'hub-issues' ? ((hubAttention?.failed_needs_return || 0) + (hubAttention?.returned_needs_decision || 0))
               : role === 'COURIER' && item.hash === 'courier-pickups' ? courierAttention?.pickup
               : role === 'COURIER' && item.hash === 'courier-deliveries' ? courierAttention?.delivery
               : null;
             const countLabel = item.hash === 'admin-orders' ? 'pesanan baru'
-              : item.hash === 'hub-pickups' ? 'paket perlu ditugaskan pickup'
+              : item.hash === 'hub-pickups' ? 'paket perlu ditugaskan penjemputan'
               : item.hash === 'hub-inbound' ? 'paket perlu dikonfirmasi tiba'
+              : item.hash === 'hub-dispatch' ? 'paket atau run perlu ditangani'
+              : item.hash === 'hub-issues' ? 'paket gagal perlu ditindaklanjuti'
               : item.hash === 'courier-pickups' ? 'tugas pickup baru' : 'tugas antar baru';
             return <div key={item.hash}>
               {item.group ? <div className="nav-group">{item.group}</div> : null}

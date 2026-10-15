@@ -11,13 +11,49 @@ import { home, menu } from '../utils/navigation';
 import { LoginPage, RegisterPage, type BuyerRegistration } from '../pages/auth';
 import { AdminOrders, AdminOverview } from '../pages/AdminPages';
 import { AccountPage } from '../pages/BuyerPages';
-import { CourierDeliveries, CourierOverview, CourierPickups } from '../pages/CourierPages';
+import { CourierDeliveries, CourierJourneyPage, CourierOverview, CourierPackagePage, CourierPickups } from '../pages/CourierPages';
 import { HubIssues, HubPickups } from '../pages/HubWorkflowPages';
-import { HubDispatch, HubInbound, HubOverview, HubReports, HubReturns } from '../pages/HubPages';
+import { HubHistoryPage } from '../pages/HubHistoryPage';
+import { HubDispatch, HubInbound, HubOverview, HubReports } from '../pages/HubPages';
 import { TrackingPage } from '../pages/TrackingPage';
 import { TrackingDetailPage } from '../pages/TrackingDetailPage';
 
 type Toast = { message: string; tone: 'success' | 'error' } | null;
+
+function trackingDestination(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const target = new URL(raw, window.location.origin);
+    if (target.origin !== window.location.origin || target.hash) return null;
+    if (target.pathname === '/tracking' && [...target.searchParams.keys()].every((key) => key === 'awb')) {
+      const awb = target.searchParams.get('awb');
+      return awb && /^\d{14}$/.test(awb) ? `/tracking/${awb}?from=${awb}` : null;
+    }
+    if (!/^\/tracking\/\d{14}$/.test(target.pathname)) return null;
+    if ([...target.searchParams.keys()].some((key) => key !== 'from')) return null;
+    const from = target.searchParams.get('from');
+    if (from && !/^\d{14}(,\d{14}){0,9}$/.test(from)) return null;
+    return target.pathname + (from ? `?from=${encodeURIComponent(from)}` : '');
+  } catch {
+    return null;
+  }
+}
+
+function courierDestination(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const target = new URL(raw, window.location.origin);
+    if (target.origin !== window.location.origin || target.hash) return null;
+    if (target.pathname === '/courier-pickups' && !target.search) return '/courier-pickups';
+    if (target.pathname !== '/courier-deliveries') return null;
+    if ([...target.searchParams.keys()].some((key) => key !== 'run')) return null;
+    const run = target.searchParams.get('run');
+    return run === null ? '/courier-deliveries'
+      : /^[1-9]\d*$/.test(run) ? `/courier-deliveries?run=${run}` : null;
+  } catch {
+    return null;
+  }
+}
 
 function parseUser(raw: unknown): User {
   const envelope = raw && typeof raw === 'object' && 'data' in raw ? (raw as { data: unknown }).data : raw;
@@ -36,25 +72,17 @@ export default function PortalRoutes() {
   const navigate = useNavigate();
   const route = location.pathname.slice(1);
   const detailAwb = /^tracking\/(\d{14})$/.exec(route)?.[1] || null;
+  const journeyRunId = /^courier-deliveries\/(\d+)\/map$/.exec(route)?.[1] || null;
+  const courierPackageAwb = /^courier-deliveries\/package\/(\d{14})$/.exec(route)?.[1] || null;
+  const hubHistoryAwb = /^hub-shipments\/(\d{14})$/.exec(route)?.[1] || null;
   const params = new URLSearchParams(location.search);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
-  const [resetTrackingOnRefresh, setResetTrackingOnRefresh] = useState(() => {
-    const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
-    const isTrackingResult = window.location.pathname === '/tracking' && new URLSearchParams(window.location.search).has('awb');
-    const isTrackingDetail = /^\/tracking\/\d{14}$/.test(window.location.pathname);
-    return navigation?.type === 'reload' && (isTrackingResult || isTrackingDetail);
-  });
   const pwa = usePwaInstall();
 
-  useEffect(() => {
-    if (!resetTrackingOnRefresh) return;
-    navigate('/tracking', { replace: true });
-    setResetTrackingOnRefresh(false);
-  }, [resetTrackingOnRefresh, navigate]);
   useEffect(() => {
     const legacy = location.hash.replace(/^#/, '');
     if (legacy) navigate(`/${legacy}`, { replace: true });
@@ -64,7 +92,7 @@ export default function PortalRoutes() {
       .then((raw) => setUser(parseUser(raw)))
       .catch((cause) => {
         if (!(cause instanceof ApiError && cause.status === 401)) {
-          setAuthError('API belum tersedia atau sesi tidak dapat dibaca.');
+          setAuthError('Layanan sedang tidak tersedia. Coba lagi beberapa saat.');
         }
       })
       .finally(() => setAuthLoading(false));
@@ -77,28 +105,27 @@ export default function PortalRoutes() {
     const timer = window.setTimeout(() => setToast(null), 5000);
     return () => window.clearTimeout(timer);
   }, [toast]);
-  useEffect(() => {
-    if ('serviceWorker' in navigator && window.isSecureContext) {
-      navigator.serviceWorker.register('/sw.js').catch(() => undefined);
-    }
-  }, []);
 
   const notify = (message: string, tone: 'success' | 'error' = 'success') => setToast({ message, tone });
   const role = primaryRole(user);
   const hubId = allowedHubId(user);
   const detailAllowed = Boolean(detailAwb && role && menu[role].some((item) => item.hash === 'tracking'));
+  const journeyAllowed = Boolean(journeyRunId && role === 'COURIER');
+  const courierPackageAllowed = Boolean(courierPackageAwb && role === 'COURIER');
+  const hubHistoryAllowed = Boolean(hubHistoryAwb && role === 'HUB_OPERATOR');
   const page = role
-    ? detailAllowed ? 'tracking' : menu[role].some((item) => item.hash === route) ? route : home[role]
+    ? detailAllowed ? 'tracking' : journeyAllowed ? 'courier-journey' : courierPackageAllowed ? 'courier-package' : hubHistoryAllowed ? 'hub-history' : menu[role].some((item) => item.hash === route) ? route : home[role]
     : route === 'daftar' ? 'daftar' : 'masuk';
 
   const finishAuth = (next: User, message: string) => {
     const nextRole = primaryRole(next);
     if (!nextRole) throw new Error('Akun belum memiliki peran. Hubungi admin.');
     setUser(next);
-    const requestedPath = params.get('next');
-    const trackingLink = requestedPath && /^\/tracking\/\d{14}(\?from=\d{14})?$/.test(requestedPath)
-      && menu[nextRole].some((item) => item.hash === 'tracking');
-    navigate(trackingLink ? requestedPath : `/${home[nextRole]}`, { replace: true });
+    const trackingPath = trackingDestination(params.get('next'));
+    const courierPath = nextRole === 'COURIER' ? courierDestination(params.get('next')) : null;
+    const destination = trackingPath && menu[nextRole].some((item) => item.hash === 'tracking')
+      ? trackingPath : courierPath;
+    navigate(destination || `/${home[nextRole]}`, { replace: true });
     notify(message);
   };
 
@@ -145,11 +172,17 @@ export default function PortalRoutes() {
   };
   const toastElement = toast ? <div className={`toast toast-${toast.tone}`} role="status">{toast.message}</div> : null;
 
-  if (resetTrackingOnRefresh) return null;
   if (authLoading) return <div className="app-boot"><Brand/><Loading label="Menyiapkan ruang kerja…"/></div>;
   if (location.hash) return null;
-  if (route !== page && !detailAllowed) {
-    const destination = !user && detailAwb
+  const nextTrackingPath = trackingDestination(params.get('next'));
+  const nextCourierPath = role === 'COURIER' ? courierDestination(params.get('next')) : null;
+  if (user && (route === 'masuk' || route === 'daftar')) {
+    const destination = nextTrackingPath && menu[role || 'BUYER'].some((item) => item.hash === 'tracking')
+      ? nextTrackingPath : nextCourierPath;
+    if (destination) return <Navigate to={destination} replace/>;
+  }
+  if (route !== page && !detailAllowed && !journeyAllowed && !courierPackageAllowed && !hubHistoryAllowed) {
+    const destination = !user && (detailAwb || (route === 'tracking' && trackingDestination(location.pathname + location.search)) || courierDestination(location.pathname + location.search))
       ? `/masuk?next=${encodeURIComponent(location.pathname + location.search)}`
       : `/${page}${page === 'tracking' ? location.search : ''}`;
     return <Navigate to={destination} replace/>;
@@ -158,8 +191,8 @@ export default function PortalRoutes() {
     return <>
       <OfflineBanner/>
       {page === 'daftar'
-        ? <RegisterPage onRegister={register} busy={authBusy} error={authError}/>
-        : <LoginPage onLogin={login} busy={authBusy} error={authError}/>}
+        ? <RegisterPage onRegister={register} busy={authBusy} error={authError} pwa={pwa}/>
+        : <LoginPage onLogin={login} busy={authBusy} error={authError} pwa={pwa}/>}
       {toastElement}
     </>;
   }
@@ -175,17 +208,17 @@ export default function PortalRoutes() {
   else if (role === 'OPS_ADMIN') {
     content = ({ 'admin-overview': <AdminOverview/>, 'admin-orders': <AdminOrders toast={notify}/> } as Record<string, ReactNode>)[page];
   } else if (role === 'HUB_OPERATOR') {
-    if (!hubId) content = <div className="page"><ErrorBox error={new Error('Akun operator belum ditautkan ke hub. Hubungi ops admin.')}/></div>;
-    else content = ({ 'hub-overview': <HubOverview hubId={hubId}/>, 'hub-pickups': <HubPickups hubId={hubId} toast={notify}/>, 'hub-issues': <HubIssues hubId={hubId} toast={notify}/>, 'hub-inbound': <HubInbound hubId={hubId} toast={notify}/>, 'hub-dispatch': <HubDispatch hubId={hubId} toast={notify}/>, 'hub-returns': <HubReturns hubId={hubId} toast={notify}/>, 'hub-reports': <HubReports hubId={hubId} toast={notify}/> } as Record<string, ReactNode>)[page];
+    if (!hubId) content = <div className="page"><ErrorBox error={new Error('Akun operator belum ditautkan ke hub. Hubungi admin operasional.')}/></div>;
+    else content = page === 'hub-history' ? <HubHistoryPage hubId={hubId} awb={hubHistoryAwb || ''}/> : ({ 'hub-overview': <HubOverview hubId={hubId} hubName={user.hub_name || undefined}/>, 'hub-pickups': <HubPickups hubId={hubId} toast={notify}/>, 'hub-issues': <HubIssues hubId={hubId} toast={notify}/>, 'hub-inbound': <HubInbound hubId={hubId} toast={notify}/>, 'hub-dispatch': <HubDispatch hubId={hubId} toast={notify}/>, 'hub-returns': <Navigate to="/hub-issues" replace/>, 'hub-reports': <HubReports hubId={hubId} toast={notify}/> } as Record<string, ReactNode>)[page];
   } else if (role === 'COURIER') {
-    content = ({ 'courier-overview': <CourierOverview/>, 'courier-pickups': <CourierPickups toast={notify}/>, 'courier-deliveries': <CourierDeliveries toast={notify}/> } as Record<string, ReactNode>)[page];
+    content = ({ 'courier-overview': <CourierOverview/>, 'courier-pickups': <CourierPickups toast={notify}/>, 'courier-deliveries': <CourierDeliveries toast={notify}/>, 'courier-journey': <CourierJourneyPage runId={Number(journeyRunId)} toast={notify}/>, 'courier-package': <CourierPackagePage awb={courierPackageAwb || ''}/> } as Record<string, ReactNode>)[page];
   }
   else content = null;
 
   if (!content) content = <div className="page"><Notice tone="error">Halaman ini tidak tersedia untuk peran Anda.</Notice></div>;
   return <>
     <OfflineBanner/>
-    <PortalShell user={user} role={role} page={page} title={detailAllowed ? 'Detail paket' : undefined} onLogout={logout} pwa={pwa}>{content}</PortalShell>
+    <PortalShell user={user} role={role} page={page} title={detailAllowed || courierPackageAllowed || hubHistoryAllowed ? 'Detail paket' : journeyAllowed ? 'Peta pengantaran' : undefined} onLogout={logout} pwa={pwa}>{content}</PortalShell>
     {toastElement}
   </>;
 }

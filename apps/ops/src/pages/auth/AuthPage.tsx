@@ -1,8 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { FiArrowRight } from 'react-icons/fi';
 import { Button, Notice } from '../../ui';
 import Brand from '../../components/Brand';
+import InstallApp from '../../components/InstallApp';
 
 export type BuyerRegistration = {
   name: string;
@@ -14,7 +15,9 @@ export type BuyerRegistration = {
   password_confirmation: string;
 };
 
-function AuthFrame({ children, register = false }: { children: ReactNode; register?: boolean }) {
+type PwaControls = { canPrompt: boolean; installed: boolean; install: () => Promise<boolean> };
+
+function AuthFrame({ children, register = false, pwa }: { children: ReactNode; register?: boolean; pwa: PwaControls }) {
   return (
     <div className="min-h-screen bg-[#fff9fc] text-[#302433] lg:grid lg:grid-cols-[min(600px,64vh)_minmax(460px,1fr)]">
       <aside className="sticky top-0 hidden h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_54%,#ffe0eb_0%,#fff0ea_54%,#fff8f3_100%)] lg:flex" aria-label="Ilustrasi kurir Anteraja">
@@ -30,7 +33,7 @@ function AuthFrame({ children, register = false }: { children: ReactNode; regist
             {children}
           </div>
         </div>
-        <footer className="flex flex-col items-center gap-3 px-5 pb-6 text-center text-xs text-[#938792]"><span>© {new Date().getFullYear()} Anteraja</span></footer>
+        <footer className="flex flex-col items-center gap-3 px-5 pb-6 text-center text-xs text-[#938792]"><InstallApp {...pwa}/><span>© {new Date().getFullYear()} Anteraja</span></footer>
       </main>
     </div>
   );
@@ -39,11 +42,14 @@ function AuthFrame({ children, register = false }: { children: ReactNode; regist
 const field = 'min-h-12 w-full rounded-xl border border-[#e7dce4] bg-[#fffafd] px-4 py-3 text-sm text-[#302433] outline-none transition-colors placeholder:text-[#a49aa3] hover:border-[#d8bbc9] focus:border-[#c02073] focus:bg-white focus:ring-2 focus:ring-[#f9d7e9]';
 const label = 'grid gap-1.5 text-xs font-bold text-[#594957]';
 
-export function LoginPage({ onLogin, busy, error }: { onLogin: (email: string, password: string) => Promise<void>; busy: boolean; error: string }) {
+export function LoginPage({ onLogin, busy, error, pwa }: { onLogin: (email: string, password: string) => Promise<void>; busy: boolean; error: string; pwa: PwaControls }) {
+  const location = useLocation();
+  const next = new URLSearchParams(location.search).get('next');
+  const registerHref = next ? `/daftar?next=${encodeURIComponent(next)}` : '/daftar';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const submit = (event: FormEvent) => { event.preventDefault(); void onLogin(email.trim(), password); };
-  return <AuthFrame>
+  return <AuthFrame pwa={pwa}>
     <p className="mb-3 inline-flex items-center gap-2 text-xs font-extrabold tracking-[.13em] text-[#b91c6d] uppercase"><span className="h-2 w-2 rounded-full bg-[#ec1688]" aria-hidden="true"/>Selamat datang</p>
     <h2 className="mb-2 text-[30px] leading-tight font-extrabold tracking-[-.045em] text-[#342435] sm:text-4xl">Masuk ke Anteraja</h2>
     <p className="mb-7 text-sm leading-6 text-[#7d707b]">Selamat datang kembali. Masukkan akun Anda untuk melanjutkan.</p>
@@ -53,11 +59,14 @@ export function LoginPage({ onLogin, busy, error }: { onLogin: (email: string, p
       {error ? <Notice tone="error">{error}</Notice> : null}
       <Button type="submit" loading={busy} className="mt-2 min-h-12 w-full justify-center rounded-xl!">Masuk <FiArrowRight size={17}/></Button>
     </form>
-    <p className="mt-7 text-center text-sm text-[#7d707b]">Belum punya akun? <Link className="font-bold text-[#b91c6d] hover:underline" to="/daftar">Daftar</Link></p>
+    <p className="mt-7 text-center text-sm text-[#7d707b]">Belum punya akun? <Link className="font-bold text-[#b91c6d] hover:underline" to={registerHref}>Daftar</Link></p>
   </AuthFrame>;
 }
 
-export function RegisterPage({ onRegister, busy, error }: { onRegister: (payload: BuyerRegistration) => Promise<void>; busy: boolean; error: string }) {
+export function RegisterPage({ onRegister, busy, error, pwa }: { onRegister: (payload: BuyerRegistration) => Promise<void>; busy: boolean; error: string; pwa: PwaControls }) {
+  const location = useLocation();
+  const next = new URLSearchParams(location.search).get('next');
+  const loginHref = next ? `/masuk?next=${encodeURIComponent(next)}` : '/masuk';
   const [form, setForm] = useState<BuyerRegistration>({ name: '', email: '', phone: '', default_address: '', default_postcode: '', password: '', password_confirmation: '' });
   const [localError, setLocalError] = useState('');
   const update = (key: keyof BuyerRegistration, value: string) => setForm((current) => ({ ...current, [key]: value }));
@@ -67,7 +76,7 @@ export function RegisterPage({ onRegister, busy, error }: { onRegister: (payload
     setLocalError('');
     void onRegister({ ...form, name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim(), default_address: form.default_address.trim() });
   };
-  return <AuthFrame register>
+  return <AuthFrame register pwa={pwa}>
     <h2 className="mb-2 text-[30px] leading-tight font-extrabold tracking-[-.045em] text-[#342435] sm:text-4xl">Daftar akun</h2>
     <p className="mb-6 text-sm leading-6 text-[#7d707b]">Isi data diri Anda untuk membuat akun.</p>
     <form onSubmit={submit} className="grid gap-3.5">
@@ -81,6 +90,6 @@ export function RegisterPage({ onRegister, busy, error }: { onRegister: (payload
       {localError || error ? <Notice tone="error">{localError || error}</Notice> : null}
       <Button type="submit" loading={busy} className="mt-2 min-h-12 w-full justify-center rounded-xl!">Buat akun<FiArrowRight size={17}/></Button>
     </form>
-    <p className="mt-6 text-center text-sm text-[#7d707b]">Sudah punya akun? <Link className="font-bold text-[#b91c6d] hover:underline" to="/masuk">Masuk</Link></p>
+    <p className="mt-6 text-center text-sm text-[#7d707b]">Sudah punya akun? <Link className="font-bold text-[#b91c6d] hover:underline" to={loginHref}>Masuk</Link></p>
   </AuthFrame>;
 }

@@ -49,9 +49,9 @@ export default function InstallApp({ canPrompt, installed, install, compact = fa
           <div><p className="mb-1 text-xs font-extrabold tracking-widest text-[#b91c6d] uppercase">Aplikasi Anteraja</p><h2 id="install-title" className="text-xl font-extrabold text-[#342435]">Pasang di perangkat</h2></div>
           <button type="button" className="grid size-9 shrink-0 place-items-center rounded-full text-[#796b77] hover:bg-[#f8eef4]" onClick={() => setShowHelp(false)} aria-label="Tutup petunjuk"><FiX size={20}/></button>
         </div>
-        <p className="mt-4 text-sm leading-6 text-[#6c5d6a]">Anteraja dapat dipasang langsung dari browser. Tidak perlu mengunduh APK.</p>
+        <p className="mt-4 text-sm leading-6 text-[#6c5d6a]">Pasang Anteraja di layar utama agar layanan mudah dibuka kapan saja.</p>
         <div className="mt-5 flex gap-3 rounded-xl bg-[#fff3f8] p-4 text-sm leading-6 text-[#4f3b4b]">{installSteps()}</div>
-        <p className="mt-4 text-xs leading-5 text-[#817480]">Gunakan HTTPS saat membuka dari ponsel. Alamat localhost hanya dapat dipasang pada perangkat yang menjalankannya.</p>
+        <p className="mt-4 text-xs leading-5 text-[#817480]">Jika pilihan pemasangan belum muncul, buka halaman ini melalui browser utama di perangkat Anda.</p>
       </section>
     </div> : null}
   </>;

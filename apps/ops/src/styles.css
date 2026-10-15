@@ -120,7 +120,11 @@ input,select,textarea{width:100%;border:1px solid #dcdce4;border-radius:9px;back
 .live-camera{position:relative;overflow:hidden;border:1px solid #e8d9e1;border-radius:14px;background:#22212b;min-height:220px}
 .live-camera-view{display:block;width:100%;height:min(52vh,360px);min-height:220px;object-fit:cover}
 .live-camera-empty{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:8px;color:#fff;font-size:.85rem}
-.live-camera-actions{display:flex;flex-wrap:wrap;gap:9px}
+.live-camera-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.live-camera-actions .button,.photo-field>.button{min-height:44px;padding:10px 16px;justify-content:center}
+.photo-field>.button{justify-self:start;margin-top:14px}
+.photo-field>small{margin-top:3px;line-height:1.5}
+@media(max-width:680px){.live-camera-actions,.live-camera-actions .button,.photo-field>.button{width:100%}}
 .live-camera-error{color:#b42332!important}
 
 .ops-attention-icon{display:grid;place-items:center;width:36px;height:36px;flex:none;border-radius:11px;background:#fff5e8;color:#a66506}
@@ -189,3 +193,5 @@ input,select,textarea{width:100%;border:1px solid #dcdce4;border-radius:9px;back
 .run-parcel-details span{text-align:right;color:var(--ink-soft)}
 .run-parcel-details small{grid-column:1/-1;color:#a06416}
 @media(max-width:560px){.run-parcel-details>div>div{grid-template-columns:1fr}.run-parcel-details span{text-align:left}}
+
+.courier-journey-page .delivery-route-map-canvas{height:min(52vh,440px);min-height:300px}

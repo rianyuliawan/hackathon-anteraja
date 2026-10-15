@@ -162,7 +162,7 @@ export function TrackingPage({ awb = '' }: { awb?: string }) {
         </form>
       </section>
 
-      {searching ? <Loading label="Mencari paket di database…" /> : null}
+      {searching ? <Loading label="Mencari paket…" /> : null}
 
       {!searching && previews.length ? (
         <section className="mt-7" aria-label="Preview paket">

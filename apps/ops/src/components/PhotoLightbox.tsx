@@ -13,7 +13,7 @@ interface PhotoLightboxProps {
 }
 
 export function PhotoLightbox({ url, mimeType, kind, awb, takenAt, address, onClose }: PhotoLightboxProps) {
-  const label = kind === 'pickup' ? 'Foto pickup' : 'Foto pengantaran';
+  const label = kind === 'pickup' ? 'Foto penjemputan' : 'Foto pengantaran';
   const extension = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
   const filename = `anteraja-${kind}-${awb.replace(/[^a-zA-Z0-9-]/g, '')}.${extension}`;
 

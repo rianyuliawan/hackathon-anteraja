@@ -1,13 +1,14 @@
-const SHELL_CACHE = 'anteraja-portal-v6';
-const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png', '/anteraja-logo.png', '/favicon.svg', '/auth-courier.png'];
+const SHELL_CACHE = 'anteraja-portal-v8';
+const OPTIONAL_SHELL = ['/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png', '/anteraja-logo.png', '/favicon.svg', '/auth-courier.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(SHELL_CACHE).then(async (cache) => {
-    await cache.addAll(SHELL);
+    await cache.addAll(['/', '/index.html']);
+    await Promise.allSettled(OPTIONAL_SHELL.map((url) => cache.add(url)));
     const response = await fetch('/index.html');
     const html = await response.text();
     const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map((match) => match[1]);
-    if (assets.length) await cache.addAll(assets);
+    await Promise.allSettled(assets.map((url) => cache.add(url)));
   }).then(() => self.skipWaiting()));
 });
 

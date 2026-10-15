@@ -3,11 +3,12 @@ import { FiCamera, FiRefreshCw } from 'react-icons/fi';
 
 export type CapturedPhoto = { file: File; capturedAt: string };
 
-export function LiveCameraCapture({ photo, onCapture, label, filePrefix = 'bukti-antar' }: {
+export function LiveCameraCapture({ photo, onCapture, label, filePrefix = 'bukti-antar', compactMobile = false }: {
   photo: CapturedPhoto | null;
   onCapture: (photo: CapturedPhoto | null) => void;
   label: string;
   filePrefix?: string;
+  compactMobile?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -37,7 +38,7 @@ export function LiveCameraCapture({ photo, onCapture, label, filePrefix = 'bukti
     setError('');
     setStarting(true);
     if (!navigator.mediaDevices?.getUserMedia) {
-      setError('Kamera memerlukan HTTPS atau localhost dan izin kamera pada browser.');
+      setError('Kamera tidak dapat dibuka. Beri izin akses kamera dan buka halaman melalui koneksi aman.');
       setStarting(false);
       return;
     }
@@ -94,9 +95,9 @@ export function LiveCameraCapture({ photo, onCapture, label, filePrefix = 'bukti
 
   return <div className="photo-field">
     <span className="field-label">{label}</span>
-    <div className="live-camera">
-      {photo && preview ? <img src={preview} alt="Foto baru dari kamera" className="live-camera-view"/>
-        : <video ref={videoRef} autoPlay muted playsInline className="live-camera-view" aria-label="Pratinjau kamera langsung"/>}
+    <div className={`live-camera ${compactMobile ? "min-h-[190px]" : ""}`}>
+      {photo && preview ? <img src={preview} alt="Foto baru dari kamera" className={`live-camera-view ${compactMobile ? "h-[min(40vh,300px)] min-h-[190px] sm:h-[360px]" : ""}`}/>
+        : <video ref={videoRef} autoPlay muted playsInline className={`live-camera-view ${compactMobile ? "h-[min(40vh,300px)] min-h-[190px] sm:h-[360px]" : ""}`} aria-label="Pratinjau kamera langsung"/>}
       {!photo && !ready && !starting ? <div className="live-camera-empty"><FiCamera size={28}/><span>Kamera belum aktif</span></div> : null}
     </div>
     {error ? <small className="live-camera-error" role="alert">{error}</small> : null}

@@ -30,14 +30,14 @@ export function Badge({ status, children }: { status?: string; children?: ReactN
 export function statusLabel(status?: string) {
   const labels: Record<string, string> = {
     PENDING_APPROVAL: 'Menunggu persetujuan', APPROVED: 'Disetujui', REJECTED: 'Ditolak',
-    WAITING_SELLER_READY: 'Menunggu toko siap', READY_FOR_PICKUP: 'Siap dijemput', PICKUP_ASSIGNED: 'Kurir pickup ditugaskan',
+    WAITING_SELLER_READY: 'Menunggu toko siap', READY_FOR_PICKUP: 'Siap dijemput', PICKUP_ASSIGNED: 'Kurir penjemputan ditugaskan',
     PENDING_ACCEPT: 'Menunggu kurir', ACCEPTED: 'Diterima kurir', PICKED_UP: 'Sudah dijemput',
     READY_FOR_LAST_MILE: 'Siap antar', DELIVERY_ASSIGNED: 'Kurir antar ditugaskan',
     OUT_FOR_DELIVERY: 'Dalam pengantaran', DELIVERY_FAILED: 'Gagal dikirim',
     AT_HUB_AWAITING_DECISION: 'Retur diterima hub', WAITING_REDELIVERY: 'Menunggu antar ulang',
-    DELIVERED: 'Terkirim', FAILED: 'Gagal', COMPLETED: 'Selesai', RETURN_REQUESTED: 'Diminta retur',
+    DELIVERED: 'Terkirim', FAILED: 'Gagal', COMPLETED: 'Selesai', RETURN_REQUESTED: 'Diminta retur', RETURN_TO_SELLER: 'Retur ke pengirim', RESCHEDULE: 'Antar ulang dijadwalkan',
     HANDED_OVER: 'Diserahkan ke kurir', ASSIGNED: 'Ditugaskan', OPEN: 'Perlu keputusan',
-    RESOLVED: 'Ditangani', SIMULATED: 'Simulasi', SENT: 'Terkirim',
+    RESOLVED: 'Ditangani', SIMULATED: 'Belum dikirim', QUEUED: 'Menunggu dikirim', SENDING: 'Sedang dikirim', SENT: 'Terkirim',
   };
   return labels[status || ''] || (status || '—').replaceAll('_', ' ').toLowerCase();
 }
@@ -74,8 +74,8 @@ export function Empty({ icon = 'package', title, detail, action }: { icon?: stri
   return <div className="empty"><span className="empty-icon"><Icon name={icon} size={27}/></span><strong>{title}</strong>{detail ? <p>{detail}</p> : null}{action}</div>;
 }
 
-export function PageHeader({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: ReactNode }) {
-  return <div className="page-header"><div>{eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}<h1>{title}</h1></div>{action ? <div className="page-action">{action}</div> : null}</div>;
+export function PageHeader({ eyebrow, title, subtitle, action }: { eyebrow?: string; title: string; subtitle?: string; action?: ReactNode }) {
+  return <div className="page-header"><div>{eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}<h1>{title}</h1>{subtitle ? <p className="muted">{subtitle}</p> : null}</div>{action ? <div className="page-action">{action}</div> : null}</div>;
 }
 
 export function Field({ label, hint, children, required }: { label: string; hint?: string; children: ReactNode; required?: boolean }) {

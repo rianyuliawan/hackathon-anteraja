@@ -12,6 +12,7 @@ export interface RouteStopPoint extends RoutePoint {
   label: string;
   order: number;
   priority?: string;
+  active?: boolean;
 }
 
 type RoadRoute = {
@@ -38,7 +39,7 @@ function FitRoute({ points }: { points: [number, number][] }) {
   return null;
 }
 
-export function DeliveryRouteMap({ hub, stops, onDuration }: { hub: RoutePoint; stops: RouteStopPoint[]; onDuration?: (minutes: number | null) => void }) {
+export function DeliveryRouteMap({ hub, stops, onDuration, originLabel = 'Hub keberangkatan' }: { hub: RoutePoint; stops: RouteStopPoint[]; onDuration?: (minutes: number | null) => void; originLabel?: string }) {
   const hubPoint = coordinates(hub);
   const located = stops.map((stop) => ({ ...stop, point: coordinates(stop) }))
     .filter((stop): stop is RouteStopPoint & { point: [number, number] } => stop.point !== null);
@@ -75,10 +76,10 @@ export function DeliveryRouteMap({ hub, stops, onDuration }: { hub: RoutePoint; 
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'/>
       <FitRoute points={bounds}/>
       {road ? <Polyline positions={road.points} pathOptions={{ color: '#dc1680', weight: 5, opacity: 0.9 }}/>: null}
-      {hubPoint ? <CircleMarker center={hubPoint} radius={10} pathOptions={{ color: '#fff', weight: 3, fillColor: '#292f50', fillOpacity: 1 }}><Tooltip direction="top">Hub keberangkatan</Tooltip></CircleMarker> : null}
-      {located.map((stop) => <CircleMarker key={stop.order} center={stop.point} radius={stop.priority === 'URGENT' ? 11 : 9}
-        pathOptions={{ color: '#fff', weight: 3, fillColor: stop.priority === 'URGENT' ? '#db5b23' : '#e81885', fillOpacity: 1 }}>
-        <Tooltip direction="top">#{stop.order} · {stop.label}</Tooltip>
+      {hubPoint ? <CircleMarker center={hubPoint} radius={10} pathOptions={{ color: '#fff', weight: 3, fillColor: '#292f50', fillOpacity: 1 }}><Tooltip direction="top">{originLabel}</Tooltip></CircleMarker> : null}
+      {located.map((stop) => <CircleMarker key={stop.order} center={stop.point} radius={stop.active ? 13 : stop.priority === 'URGENT' ? 11 : 9}
+        pathOptions={{ color: '#fff', weight: 3, fillColor: stop.active ? '#292f50' : stop.priority === 'URGENT' ? '#db5b23' : '#e81885', fillOpacity: 1 }}>
+        <Tooltip direction="top">#{stop.order} · {stop.label}{stop.active ? ' · tujuan berikutnya' : ''}</Tooltip>
       </CircleMarker>)}
     </MapContainer>
     <p>{road ? `Jalur mengikuti jalan · ${road.distance_km} km · perkiraan ${road.duration_minutes} menit tanpa lalu lintas langsung.`

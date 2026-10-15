@@ -29,9 +29,9 @@ export async function csrf(): Promise<string> {
     credentials: 'include',
     headers: { Accept: 'application/json', 'X-Workspace-Session': await sessionScope },
   });
-  if (!response.ok) throw new ApiError('Tidak bisa memulai sesi. Periksa koneksi API.', response.status);
+  if (!response.ok) throw new ApiError('Tidak dapat memulai sesi. Periksa koneksi lalu coba lagi.', response.status);
   const token = xsrfToken();
-  if (!token) throw new ApiError('Token sesi tidak tersedia.', 0);
+  if (!token) throw new ApiError('Sesi tidak tersedia. Muat ulang halaman lalu coba lagi.', 0);
   return token;
 }
 

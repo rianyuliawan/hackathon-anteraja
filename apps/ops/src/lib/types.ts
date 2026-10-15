@@ -12,6 +12,7 @@ export interface User {
   phone?: string | null;
   role?: Role;
   hub_id?: number | null;
+  hub_name?: string | null;
   roles?: Array<Role | UserRole>;
   default_address?: string;
   default_postcode?: string;
@@ -45,6 +46,7 @@ export interface Courier {
   phone?: string;
   available?: boolean;
   max_parcels?: number;
+  unreturned_failed_count?: number;
   zones?: Zone[];
   service_types?: string[];
 }
@@ -148,6 +150,7 @@ export interface Shipment {
   destination_point?: { latitude: number; longitude: number; source: 'ADDRESS' | 'POSTCODE' } | null;
   created_at?: string;
   attempt_count?: number;
+  last_attempt?: { attempt_no: number; result: string; failure_reason?: string | null; notes?: string | null; attempted_at?: string } | null;
   ready_since?: string | null;
   waiting_hours?: number;
   age_hours?: number;
@@ -286,6 +289,37 @@ export interface TrackingPreview {
   latest_update?: string;
 }
 
+export interface TrackingAttempt {
+  attempt_no: number;
+  result: 'DELIVERED' | 'FAILED';
+  failure_reason?: string | null;
+  recipient_name?: string | null;
+  attempted_at: string;
+}
+
+export interface HubShipmentHistory {
+  shipment: {
+    id: number;
+    awb: string;
+    status: string;
+    custody_type?: string | null;
+    created_at?: string;
+    delivered_at?: string | null;
+    recipient_name?: string | null;
+    destination_address?: string | null;
+    destination_postcode?: string | null;
+    sender_name?: string | null;
+    origin_address?: string | null;
+  };
+  hub_name: string;
+  pickup_photo_available: boolean;
+  pickup_photo_taken_at?: string | null;
+  events: Array<TrackingEvent & { actor_name?: string | null }>;
+  attempts: Array<TrackingAttempt & { id: number; notes?: string | null; courier_name?: string | null; run_id: number; photo_available: boolean }>;
+  issues: Array<{ id: number; attempt_no: number; status: string; decision?: string | null; decision_note?: string | null; scheduled_redelivery_at?: string | null; created_at: string; decided_at?: string | null; decided_by_name?: string | null }>;
+  notifications: Array<{ id: number; logical_recipient: string; template_key: string; status: string; delivery_mode: string; created_at: string; sent_at?: string | null; last_error?: string | null; recipient_name?: string | null }>;
+}
+
 export interface Tracking {
   awb: string;
   status: string;
@@ -314,6 +348,7 @@ export interface Tracking {
   delivery_photo_taken_at?: string | null;
   recipient_confirmed?: boolean;
   events?: TrackingEvent[];
+  attempts?: TrackingAttempt[];
 }
 export interface DashboardData {
   pending_orders?: number;
