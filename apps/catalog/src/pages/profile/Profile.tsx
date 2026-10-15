@@ -19,6 +19,7 @@ export function Profile({
   const [form, setForm] = useState({
     name: user.name || "",
     phone: user.phone || "",
+    telegram_consent: user.telegram_opt_in || false,
     default_address: user.default_address || "",
     default_postcode: user.default_postcode || "",
   });
@@ -112,6 +113,15 @@ export function Profile({
               <input readOnly value={user.email} className="readonly-input" />
             </label>
           </div>
+          <label className="mt-5 flex items-start gap-3 rounded-xl border border-[#eadce3] bg-white p-4 text-xs leading-5 text-[#554451]">
+            <input
+              className="mt-0.5 size-4 shrink-0 accent-[#9e455e]"
+              type="checkbox"
+              checked={form.telegram_consent}
+              onChange={(event) => setForm({ ...form, telegram_consent: event.target.checked })}
+            />
+            <span>Terima pembaruan pesanan melalui Telegram pada nomor HP di atas. Jika nomor berubah, simpan kembali pilihan ini.</span>
+          </label>
           <button
             className="button button-primary"
             disabled={busy}

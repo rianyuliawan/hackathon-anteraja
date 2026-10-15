@@ -11,7 +11,7 @@ FRD ini mengikuti [PRD](PRD.md), [alur dan arsitektur](ALUR_DAN_ARSITEKTUR.md), 
 | `HUB_OPERATOR` | Menangani pickup, konfirmasi tiba/retur, pemilihan paket dan kurir untuk run, serah terima, keputusan kendala, riwayat, dan laporan hub. |
 | `COURIER` | Menerima pickup dan mengambil foto; menerima/menolak run atau paket delivery, memulai run, mengikuti stop, mencatat hasil, dan melihat riwayatnya. Izin pickup/delivery mengikuti `courier_zones.service_type`. |
 
-Registrasi publik hanya menghasilkan `BUYER`; email unik. Login mengarahkan ke halaman sesuai role, tetapi seluruh endpoint tetap memverifikasi role, kepemilikan, dan hub terkait. Kedua aplikasi memakai API dan akun yang sama; sesi antartab dijaga agar uji akun berbeda tidak saling menimpa.
+Registrasi publik hanya menghasilkan `BUYER`; email unik dan nomor ponsel divalidasi. Pembeli dapat memberi atau mencabut persetujuan notifikasi Telegram saat daftar atau di profil. Login mengarahkan ke halaman sesuai role, tetapi seluruh endpoint tetap memverifikasi role, kepemilikan, dan hub terkait. Kedua aplikasi memakai API dan akun yang sama; sesi antartab dijaga agar uji akun berbeda tidak saling menimpa.
 
 ## Fungsi dan kriteria terima
 
@@ -32,7 +32,7 @@ Registrasi publik hanya menghasilkan `BUYER`; email unik. Login mengarahkan ke h
 | TRK-02 | Detail menampilkan timeline terbaru di atas, jam WIB, hub, nama kurir bila relevan, nomor attempt, alasan penolakan/gagal kirim, catatan kurir, jadwal ulang, serta foto pickup/delivery yang diizinkan. Pengguna lain menerima detail terbatas dari server. |
 | TRK-03 | Refresh halaman atau tombol perbarui status memuat kembali AWB yang sedang dibuka. Waktu event historis yang dikoreksi dibaca dari tabel koreksi, tanpa mengubah baris audit asli. |
 | RPT-01 | Operator hub dapat menyegarkan laporan per hari dan mengunduh XLSX aktivitas/percobaan. Ops admin melihat ringkasan lintas hub. Laporan memakai waktu WIB efektif. |
-| MSG-01 | Laravel membuat outbox hanya untuk template yang diizinkan. n8n/adapter menyimpan `SIMULATED`, `SENT` dengan ID provider, atau `FAILED`; kegagalan pesan tidak membatalkan transaksi paket. |
+| MSG-01 | Laravel membuat outbox hanya untuk template yang diizinkan. Pembeli baru yang menyetujui Telegram dengan nomor ponsel valid otomatis memenuhi syarat LIVE tanpa allowlist/pairing; akun dummy seed tetap MOCK. n8n/adapter menyimpan `SIMULATED`, `SENT` dengan ID provider, atau `FAILED`; kegagalan pesan tidak membatalkan transaksi paket. |
 
 ## Transisi status dan pemegang paket
 

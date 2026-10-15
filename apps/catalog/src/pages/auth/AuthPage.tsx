@@ -12,6 +12,7 @@ type AuthForm = {
   name: string;
   email: string;
   phone: string;
+  telegram_consent: boolean;
   default_address: string;
   default_postcode: string;
   password: string;
@@ -35,6 +36,7 @@ export default function AuthPage({
     name: "",
     email: "",
     phone: "",
+    telegram_consent: false,
     default_address: "",
     default_postcode: "",
     password: "",
@@ -157,6 +159,17 @@ export default function AuthPage({
                   placeholder="08xx xxxx xxxx"
                 />,
               )}
+            {register && (
+              <label className="flex items-start gap-3 rounded-xl border border-[#eadce3] bg-white px-4 py-3 text-xs leading-5 text-[#554451]">
+                <input
+                  className="mt-0.5 size-4 shrink-0 accent-[#9e455e]"
+                  type="checkbox"
+                  checked={form.telegram_consent}
+                  onChange={(event) => setForm((current) => ({ ...current, telegram_consent: event.target.checked }))}
+                />
+                <span>Saya setuju menerima pembaruan pesanan melalui Telegram pada nomor HP ini.</span>
+              </label>
+            )}
             {register &&
               field(
                 "Alamat pengiriman",

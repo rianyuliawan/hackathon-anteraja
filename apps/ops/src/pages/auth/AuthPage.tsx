@@ -9,6 +9,7 @@ export type BuyerRegistration = {
   name: string;
   email: string;
   phone: string;
+  telegram_consent: boolean;
   default_address: string;
   default_postcode: string;
   password: string;
@@ -67,9 +68,9 @@ export function RegisterPage({ onRegister, busy, error, pwa }: { onRegister: (pa
   const location = useLocation();
   const next = new URLSearchParams(location.search).get('next');
   const loginHref = next ? `/masuk?next=${encodeURIComponent(next)}` : '/masuk';
-  const [form, setForm] = useState<BuyerRegistration>({ name: '', email: '', phone: '', default_address: '', default_postcode: '', password: '', password_confirmation: '' });
+  const [form, setForm] = useState<BuyerRegistration>({ name: '', email: '', phone: '', telegram_consent: false, default_address: '', default_postcode: '', password: '', password_confirmation: '' });
   const [localError, setLocalError] = useState('');
-  const update = (key: keyof BuyerRegistration, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const update = (key: keyof BuyerRegistration, value: string | boolean) => setForm((current) => ({ ...current, [key]: value }));
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (form.password !== form.password_confirmation) { setLocalError('Ulangi kata sandi dengan benar.'); return; }
@@ -83,6 +84,10 @@ export function RegisterPage({ onRegister, busy, error, pwa }: { onRegister: (pa
       <label className={label}>Nama lengkap<input className={field} required autoComplete="name" value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="Nama lengkap Anda"/></label>
       <label className={label}>Email<input className={field} required type="email" autoComplete="email" value={form.email} onChange={(event) => update('email', event.target.value)} placeholder="nama@email.com"/></label>
       <label className={label}>Nomor HP<input className={field} required type="tel" autoComplete="tel" value={form.phone} onChange={(event) => update('phone', event.target.value)} placeholder="08xx xxxx xxxx"/></label>
+      <label className="flex items-start gap-3 rounded-xl border border-[#eadce4] bg-[#fffafd] px-4 py-3 text-xs leading-5 text-[#594957]">
+        <input className="mt-0.5 size-4 shrink-0 accent-[#c02073]" type="checkbox" checked={form.telegram_consent} onChange={(event) => update('telegram_consent', event.target.checked)}/>
+        <span>Saya setuju menerima pembaruan pengiriman melalui Telegram pada nomor HP ini.</span>
+      </label>
       <label className={label}>Alamat<textarea className={`${field} min-h-20 resize-y`} required rows={2} autoComplete="street-address" value={form.default_address} onChange={(event) => update('default_address', event.target.value)} placeholder="Jalan, nomor rumah, kelurahan, kecamatan"/></label>
       <label className={label}>Kode pos<input className={field} required inputMode="numeric" pattern="[0-9]{5}" maxLength={5} title="Masukkan 5 digit kode pos" autoComplete="postal-code" value={form.default_postcode} onChange={(event) => update('default_postcode', event.target.value)} placeholder="Contoh: 13910"/></label>
       <label className={label}>Kata sandi<input className={field} required type="password" minLength={8} autoComplete="new-password" value={form.password} onChange={(event) => update('password', event.target.value)} placeholder="Minimal 8 karakter"/></label>

@@ -265,6 +265,57 @@ class SatriaFlowTest extends TestCase
         $this->assertSame($existingUsers, DB::table('users')->count());
     }
 
+    public function test_new_buyer_can_receive_live_awb_without_manual_allowlist(): void
+    {
+        config([
+            'satria.telegram_mode' => 'LIVE',
+            'satria.n8n_webhook_url' => '',
+            'satria.telegram_live_recipient_emails' => [],
+        ]);
+        $registration = $this->postJson('/register', [
+            'name' => 'Pembeli Uji',
+            'email' => 'pembeli.uji@example.com',
+            'phone' => '0812 3456-7890',
+            'telegram_consent' => true,
+            'default_address' => 'Jl. Melati No. 1, Cakung, Jakarta Timur',
+            'default_postcode' => '13910',
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+        ])->assertCreated()->assertJsonPath('data.user.telegram_opt_in', true);
+        $buyer = User::findOrFail($registration->json('data.user.id'));
+        $this->assertSame('081234567890', $buyer->phone);
+        $this->assertTrue(app(SatriaService::class)->telegramLiveAllowed($buyer->id));
+
+        $productId = DB::table('products')->where('sku', 'BAJU-001')->value('id');
+        $orderId = $this->actingAs($buyer)->postJson('/api/v1/orders', [
+            'checkout_key' => (string) Str::uuid(),
+            'items' => [['product_id' => $productId, 'quantity' => 1]],
+            'recipient' => [
+                'name' => $buyer->name, 'phone' => $buyer->phone,
+                'address' => $buyer->default_address, 'postcode' => $buyer->default_postcode,
+            ],
+        ])->assertCreated()->json('data.id');
+        $admin = User::where('email', 'rianyuliawan@anteraja.id')->firstOrFail();
+        $this->actingAs($admin)->postJson("/api/v1/admin/orders/{$orderId}/approve")
+            ->assertOk();
+        $notification = DB::table('notifications as notification')
+            ->join('notification_targets as target', 'target.id', '=', 'notification.target_id')
+            ->where('target.user_id', $buyer->id)
+            ->where('notification.template_key', 'AWB_GENERATED')
+            ->select('notification.*')->first();
+        $this->assertNotNull($notification);
+        $this->assertSame('LIVE', $notification->delivery_mode);
+        $this->assertSame('QUEUED', $notification->status);
+        $this->withToken((string) config('satria.internal_token'))
+            ->postJson("/api/v1/internal/notifications/{$notification->id}/claim")
+            ->assertOk()->assertJsonPath('notification.phone', '6281234567890');
+
+        $this->actingAs($buyer)->patchJson('/api/v1/me', [
+            'phone' => '081298765432',
+        ])->assertOk()->assertJsonPath('data.user.telegram_opt_in', false);
+        $this->assertFalse(app(SatriaService::class)->telegramLiveAllowed($buyer->id));
+    }
+
     public function test_demo_fixture_is_ready_for_last_mile_with_shared_pickup_photo(): void
     {
         $admin = User::where('email', 'dimas.pratama@anteraja.id')->firstOrFail();

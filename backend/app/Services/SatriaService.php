@@ -99,10 +99,17 @@ class SatriaService
 
     public function telegramLiveAllowed(int $userId): bool
     {
-        $email = DB::table('users')->where('id', $userId)->value('email');
+        $user = DB::table('users')->where('id', $userId)->first(['email', 'telegram_opt_in_at']);
+        if ($user === null) {
+            return false;
+        }
+        if (in_array(strtolower((string) $user->email),
+            config('satria.telegram_live_recipient_emails', []), true)) {
+            return true;
+        }
 
-        return $email !== null && in_array(strtolower((string) $email),
-            config('satria.telegram_live_recipient_emails', []), true);
+        return $user->telegram_opt_in_at !== null && DB::table('user_roles')
+            ->where('user_id', $userId)->where('role', 'BUYER')->exists();
     }
 
     public function telegramTemplateAllowed(string $recipient, string $template): bool

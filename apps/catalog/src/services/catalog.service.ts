@@ -119,6 +119,7 @@ export const api = {
     name: string;
     email: string;
     phone: string;
+    telegram_consent: boolean;
     default_address: string;
     default_postcode: string;
     password: string;

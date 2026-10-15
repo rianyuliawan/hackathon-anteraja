@@ -3,6 +3,7 @@ export interface Buyer {
   name: string;
   email: string;
   phone?: string | null;
+  telegram_opt_in?: boolean;
   default_address?: string | null;
   default_postcode?: string | null;
   roles?: Array<string | { role: string }>;

@@ -16,7 +16,10 @@ class AuthController extends Controller
 {
     public function register(Request $request): JsonResponse
     {
-        $request->merge(['email' => Str::lower(trim((string) $request->input('email', '')))]);
+        $request->merge([
+            'email' => Str::lower(trim((string) $request->input('email', ''))),
+            'phone' => preg_replace('/[\s-]+/', '', (string) $request->input('phone', '')),
+        ]);
         $input = $request->validate([
             'name' => ['required', 'string', 'max:160'],
             'email' => [
@@ -29,7 +32,8 @@ class AuthController extends Controller
                 },
             ],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
-            'phone' => ['required', 'string', 'max:30'],
+            'phone' => ['required', 'regex:/^(?:\+62|62|0)8[0-9]{8,11}$/'],
+            'telegram_consent' => ['sometimes', 'boolean'],
             'default_address' => ['required', 'string', 'max:1000'],
             'default_postcode' => ['required', 'regex:/^[0-9]{5}$/'],
         ], [
@@ -42,6 +46,7 @@ class AuthController extends Controller
                 'email' => Str::lower($input['email']),
                 'password' => Hash::make($input['password']),
                 'phone' => $input['phone'],
+                'telegram_opt_in_at' => ($input['telegram_consent'] ?? false) ? now() : null,
                 'default_address' => $input['default_address'],
                 'default_postcode' => $input['default_postcode'],
             ]);
@@ -90,15 +95,28 @@ class AuthController extends Controller
 
     public function updateProfile(Request $request): JsonResponse
     {
+        if ($request->exists('phone')) {
+            $request->merge(['phone' => preg_replace('/[\s-]+/', '', (string) $request->input('phone'))]);
+        }
         $input = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:160'],
-            'phone' => ['sometimes', 'required', 'string', 'max:30'],
+            'phone' => ['sometimes', 'required', 'regex:/^(?:\+62|62|0)8[0-9]{8,11}$/'],
+            'telegram_consent' => ['sometimes', 'boolean'],
             'default_address' => ['sometimes', 'required', 'string', 'max:1000'],
             'default_postcode' => ['sometimes', 'required', 'regex:/^[0-9]{5}$/'],
         ]);
-        $request->user()->update($input);
+        $user = $request->user();
+        if (array_key_exists('telegram_consent', $input)) {
+            abort_unless(DB::table('user_roles')->where('user_id', $user->id)
+                ->where('role', 'BUYER')->exists(), 403);
+            $input['telegram_opt_in_at'] = $input['telegram_consent'] ? now() : null;
+            unset($input['telegram_consent']);
+        } elseif (array_key_exists('phone', $input) && $input['phone'] !== $user->phone) {
+            $input['telegram_opt_in_at'] = null;
+        }
+        $user->update($input);
 
-        return response()->json(['data' => $this->identity($request->user()->fresh())]);
+        return response()->json(['data' => $this->identity($user->fresh())]);
     }
 
     public function createPairing(Request $request): JsonResponse
@@ -156,6 +174,7 @@ class AuthController extends Controller
         $userData = $user->only(['id', 'name', 'email', 'phone', 'default_address', 'default_postcode', 'active']);
         $userData['hub_id'] = $hubId;
         $userData['hub_name'] = $hubId ? DB::table('hubs')->where('id', $hubId)->value('name') : null;
+        $userData['telegram_opt_in'] = $user->telegram_opt_in_at !== null;
         $userData['telegram_linked'] = DB::table('telegram_links')->where('user_id', $user->id)
             ->whereNull('revoked_at')->exists();
 

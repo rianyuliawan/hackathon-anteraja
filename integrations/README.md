@@ -11,7 +11,7 @@ Folder ini berisi [workflow n8n](n8n/README.md) dan [adapter Telegram](telegram-
 
 ## Menyiapkan demo Telegram asli
 
-Pemilik akun demo mengisi kredensial API Telegram di server dan menjalankan login interaktif adapter. Buyer, kurir, dan admin menghubungkan akun melalui kode sekali pakai `SATRIA-XXXXXXXX`. Sesudah tes kirim kecil berhasil dan Laravel menunjukkan peer terverifikasi, aktifkan `ADAPTER_MODE=LIVE` dan mode notifikasi LIVE. Pesan LIVE harus memperoleh `provider_message_id`; status `SIMULATED` tidak pernah dianggap terkirim.
+Pemilik akun pengirim (admin dan kurir) mengisi kredensial API Telegram di server dan menjalankan login interaktif adapter. Setelah adapter siap, aktifkan `ADAPTER_MODE=LIVE` dan `TELEGRAM_MODE=LIVE`. Pembeli baru dapat menyetujui notifikasi Telegram saat daftar atau di profil; nomor ponselnya dipakai langsung tanpa pairing dan tanpa menambah email ke allowlist. Akun staf atau akun lama dapat diizinkan melalui `TELEGRAM_LIVE_RECIPIENT_EMAILS`. Data dummy seed tetap MOCK. Pesan LIVE harus memperoleh `provider_message_id`; status `SIMULATED` tidak pernah dianggap terkirim. Telegram dapat membatasi pencarian nomor sesuai pengaturan privasi penerima.
 
 ## Pemeriksaan lokal
 

@@ -26,7 +26,7 @@ Fashionaja merupakan katalog pihak ketiga secara tampilan dan domain, tetapi dal
 
 ## Integrasi dan batasannya
 
-Laravel membuat event serta outbox notifikasi; n8n menangani pengiriman, pemulihan antrean, pengingat, dan laporan melalui adapter Telegram. Template pelanggan meliputi AWB terbit, mulai diantar, gagal kirim, jadwal ulang, dan terkirim; template internal meliputi penugasan dan kendala. Pengiriman LIVE dibatasi penerima yang diizinkan; nomor telepon bukan jaminan akun Telegram dapat dihubungi. Gagal mengirim pesan tidak membatalkan perubahan status paket.
+Laravel membuat event serta outbox notifikasi; n8n menangani pengiriman, pemulihan antrean, pengingat, dan laporan melalui adapter Telegram. Template pelanggan meliputi AWB terbit, mulai diantar, gagal kirim, jadwal ulang, dan terkirim; template internal meliputi penugasan dan kendala. Pelanggan baru dapat menyetujui notifikasi Telegram saat mendaftar atau di profil; bila nomor ponsel valid, pengiriman LIVE tidak memerlukan allowlist manual atau pairing. Akun dummy seed tetap MOCK. Nomor telepon bukan jaminan akun Telegram dapat dihubungi. Gagal mengirim pesan tidak membatalkan perubahan status paket.
 
 Integrasi AWB resmi Anteraja, pembayaran, transit antarahub, pelacakan GPS langsung, optimasi rute global yang dijamin, dan jaminan Telegram mencapai setiap nomor berada di luar cakupan implementasi saat ini.
 
