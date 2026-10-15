@@ -255,8 +255,10 @@ class IntegrationController extends Controller
             ?? today()->toDateString();
 
         $reports = $this->satria->generateDailyReports($date);
-        foreach ($reports as $report) {
-            $this->satria->notifyDailyReport($report);
+        if ($date === today()->toDateString() && now()->hour >= 17) {
+            foreach ($reports as $report) {
+                $this->satria->notifyDailyReport($report);
+            }
         }
 
         return response()->json(['data' => $reports]);

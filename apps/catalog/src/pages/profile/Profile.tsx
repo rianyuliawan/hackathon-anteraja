@@ -2,16 +2,19 @@ import { useState, type FormEvent } from "react";
 import { api } from "../../services/catalog.service";
 import type { Buyer } from "../../types/catalog";
 import Icon from "../../components/Icon";
+import InstallApp from "../../components/InstallApp";
 import { errorText } from "../../utils/format";
 
 export function Profile({
   user,
   onUser,
   logout,
+  pwa,
 }: {
   user: Buyer;
   onUser: (user: Buyer) => void;
   logout: () => void;
+  pwa: { canPrompt: boolean; installed: boolean; install: () => Promise<boolean> };
 }) {
   const [form, setForm] = useState({
     name: user.name || "",
@@ -45,7 +48,7 @@ export function Profile({
         <h1>Profil saya</h1>
         <p>Data ini akan digunakan saat Anda membuat pesanan berikutnya.</p>
       </div>
-      <div className="mx-auto max-w-2xl">
+      <div className="mx-auto grid max-w-5xl items-start gap-5 lg:grid-cols-[minmax(0,1fr)_16rem]">
         <form className="surface-card profile-card" onSubmit={save}>
           <div className="card-title">
             <span className="title-icon">
@@ -117,12 +120,18 @@ export function Profile({
             Simpan perubahan <Icon name="check" size={18} />
           </button>
         </form>
-        <button
-          className="button button-soft full-width mobile-logout mt-5"
-          onClick={logout}
-        >
-          Keluar dari akun
-        </button>
+        <aside className="surface-card flex flex-col gap-3 p-5 sm:p-6" aria-label="Menu aplikasi">
+          <h2 className="text-base font-extrabold text-[#392137]">Aplikasi Fashionaja</h2>
+          <p className="text-xs leading-5 text-[#796d78]">Pasang katalog agar mudah dibuka dari layar utama.</p>
+          <InstallApp {...pwa} />
+          <button
+            className="button button-soft full-width mobile-logout mt-2"
+            onClick={logout}
+            type="button"
+          >
+            Keluar dari akun
+          </button>
+        </aside>
         {message && (
           <p className="inline-success" role="status">
             {message}

@@ -289,7 +289,6 @@ function CatalogShell() {
         openCart={() => setCartOpen(true)}
         user={user}
         logout={logout}
-        pwa={pwa}
       />
       <Routes>
         <Route
@@ -333,7 +332,7 @@ function CatalogShell() {
         />
         <Route
           path="/akun"
-          element={<Profile user={user} onUser={setUser} logout={logout} />}
+          element={<Profile user={user} onUser={setUser} logout={logout} pwa={pwa} />}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

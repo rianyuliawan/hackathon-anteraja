@@ -2,20 +2,17 @@ import { NavLink } from "react-router-dom";
 import type { Buyer } from "../../types/catalog";
 import Brand from "../Brand";
 import Icon from "../Icon";
-import InstallApp from "../InstallApp";
 
 export function Header({
   count,
   openCart,
   user,
   logout,
-  pwa,
 }: {
   count: number;
   openCart: () => void;
   user: Buyer;
   logout: () => void;
-  pwa: { canPrompt: boolean; installed: boolean; install: () => Promise<boolean> };
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-[#eee6e5] bg-[#fffdfa]/95 backdrop-blur-sm">
@@ -46,7 +43,6 @@ export function Header({
           </NavLink>
         </nav>
         <div className="flex items-center gap-2 md:gap-3">
-          <InstallApp {...pwa} iconOnlyMobile/>
           <button
             className="relative grid size-11 place-items-center rounded-full border border-[#e8dddf] bg-white text-[#392137] transition hover:bg-[#fbefec] md:size-12"
             type="button"

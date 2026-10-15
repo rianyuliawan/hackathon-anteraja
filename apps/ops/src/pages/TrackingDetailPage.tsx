@@ -202,7 +202,10 @@ function TrackingDetails({ data, onConfirm, onConfirmReschedule, confirming }: {
                 {data.recipient_confirmed ? (
                   <p className="mb-0 flex items-center gap-2 text-sm font-semibold text-[#28845c]"><FiCheckCircle size={19} /> Penerimaan paket sudah dikonfirmasi.</p>
                 ) : (
-                  <Button type="button" onClick={onConfirm} loading={confirming} icon="check" className="w-full justify-center rounded-xl! sm:w-auto">Konfirmasi paket diterima</Button>
+                  <div className="space-y-2">
+                    <Button type="button" onClick={onConfirm} loading={confirming} icon="check" className="w-full justify-center rounded-xl! sm:w-auto">Konfirmasi paket diterima (opsional)</Button>
+                    <p className="mb-0 text-xs leading-5 text-[#897b88]">Paket tetap tercatat terkirim meskipun Anda tidak menekan tombol ini.</p>
+                  </div>
                 )}
               </div>
             ) : null}

@@ -154,7 +154,7 @@ export default function PortalShell({ user, role, page, title, children, onLogou
             <button className="icon-button menu-toggle relative" onClick={() => setMenuOpen(true)} aria-label={hubPending ? `Buka menu, ${hubPending} tugas hub perlu ditangani` : 'Buka menu'}><Icon name="menu" />{hubPending > 0 ? <span className="nav-count mobile-menu-count" aria-hidden="true">{hubPending > 99 ? '99+' : hubPending}</span> : null}</button>
             <div className="breadcrumb"><span>Anteraja</span><Icon name="chevron" size={14} /><strong>{title || links.find((item) => item.hash === page)?.label || 'Lacak AWB'}</strong></div>
           </div>
-          <div className="workspace-header-right"><InstallApp {...pwa} iconOnlyMobile/>{role !== 'BUYER' && role !== 'OPS_ADMIN' && role !== 'HUB_OPERATOR' ? <span className="header-role"><Icon name="shield" size={15} />{roleLabel}</span> : null}<span className="top-avatar">{user.name?.charAt(0).toUpperCase() || 'A'}</span></div>
+          <div className="workspace-header-right">{role !== 'BUYER' && role !== 'OPS_ADMIN' && role !== 'HUB_OPERATOR' ? <span className="header-role"><Icon name="shield" size={15} />{roleLabel}</span> : null}<span className="top-avatar">{user.name?.charAt(0).toUpperCase() || 'A'}</span></div>
         </header>
         <main className="workspace-main w-full" id="main-content">{children}</main>
         <footer className="workspace-footer">© {new Date().getFullYear()} Anteraja</footer>

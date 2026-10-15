@@ -971,10 +971,15 @@ class SatriaFlowTest extends TestCase
     {
         config(['satria.telegram_mode' => 'MOCK', 'satria.n8n_webhook_url' => '']);
         $hubAdmin = User::where('email', 'rianyuliawan1@anteraja.id')->firstOrFail();
+        $this->travelTo(today()->setTime(9, 40));
         $date = today()->toDateString();
 
         $this->withToken((string) config('satria.internal_token'))
             ->postJson('/api/v1/internal/reports/daily', ['report_date' => $date])->assertOk();
+        $this->assertSame(0, DB::table('notifications')->where('template_key', 'DAILY_REPORT')->count());
+
+        $this->travelTo(today()->setTime(17, 1));
+        $this->postJson('/api/v1/internal/reports/daily', ['report_date' => $date])->assertOk();
         $this->postJson('/api/v1/internal/reports/daily', ['report_date' => $date])->assertOk();
 
         $rows = DB::table('notifications as notification')
