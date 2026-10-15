@@ -39,6 +39,21 @@ export function failureReasonLabel(reason?: string | null) {
   return labels[reason || ''] || reason || 'Alasan belum tersedia';
 }
 
+const deliveredByCourierEvents = ['OUT_FOR_DELIVERY', 'DELIVERED', 'DELIVERY_FAILED'];
+const pickedUpByCourierEvents = ['PICKUP_ACCEPTED', 'PICKED_UP'];
+
+function actorLabel(event: TrackingEvent) {
+  if (!event.actor_name) return null;
+  if (deliveredByCourierEvents.includes(event.event_type)) return `Diantar oleh ${event.actor_name}`;
+  if (pickedUpByCourierEvents.includes(event.event_type)) return `Dijemput oleh ${event.actor_name}`;
+  return `Ditangani oleh ${event.actor_name}`;
+}
+
+function eventReason(event: TrackingEvent) {
+  const reason = event.details?.reason;
+  return typeof reason === 'string' && reason ? failureReasonLabel(reason) : null;
+}
+
 function packageWeight(grams?: number | null) {
   if (!grams) return '—';
   return grams >= 1000 ? `${new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2 }).format(grams / 1000)} kg` : `${grams} g`;
@@ -163,6 +178,7 @@ function TrackingDetails({ data, onConfirm, onConfirmReschedule, confirming }: {
               {data.attempts.map((attempt) => <li key={attempt.attempt_no} className={`rounded-2xl border p-4 ${attempt.result === 'DELIVERED' ? 'border-[#c9ead6] bg-[#f4fcf7]' : 'border-[#f3dfc4] bg-[#fffbf2]'}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm text-[#3d3039]">Percobaan ke-{attempt.attempt_no}</strong><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${attempt.result === 'DELIVERED' ? 'bg-[#dff5e8] text-[#207449]' : 'bg-[#fff0d5] text-[#9c6229]'}`}>{attempt.result === 'DELIVERED' ? 'Berhasil diantar' : 'Belum berhasil'}</span></div>
                 <p className="mb-1 mt-2 text-sm leading-6 text-[#5f505b]">{attempt.result === 'DELIVERED' ? `Diterima oleh ${attempt.recipient_name || 'penerima'}` : failureReasonLabel(attempt.failure_reason)}</p>
+                {attempt.courier_name ? <p className="mb-1 text-xs font-semibold text-[#6d5a68]">Kurir: {attempt.courier_name}</p> : null}
                 <time className="text-xs text-[#8b7c86]">{dateTime(attempt.attempted_at)} WIB</time>
               </li>)}
             </ol>
@@ -203,6 +219,8 @@ function TrackingDetails({ data, onConfirm, onConfirmReschedule, confirming }: {
                 <div className={index === 0 ? 'rounded-xl bg-[#fff1f7] p-3' : ''}>
                   <strong className={`block text-sm leading-5 ${index === 0 ? 'text-[#b91f70]' : 'text-[#453943]'}`}>{eventDescription(event)}</strong>
                   {event.hub_name || event.location ? <p className="mb-0 mt-1 text-xs text-[#817580]">{event.hub_name || event.location}</p> : null}
+                  {actorLabel(event) ? <p className="mb-0 mt-1 text-xs font-semibold text-[#6b5866]">{actorLabel(event)}</p> : null}
+                  {eventReason(event) ? <p className="mb-0 mt-1 text-xs leading-5 text-[#a34453]">Alasan: {eventReason(event)}</p> : null}
                   <time className="mt-1 block text-xs text-[#988b96]">{dateTime(event.occurred_at)}</time>
                 </div>
               </li>
