@@ -1,0 +1,77 @@
+{
+  "name": "Satria - Daily report",
+  "nodes": [
+    {
+      "id": "4ec6fbc7-27fd-48a7-a3f8-94883b60bf65",
+      "name": "Every day at 17 WIB",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 17 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "45eaa928-260c-4cef-aca6-bfbdbd7019c8",
+      "name": "Generate report in Laravel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SATRIA_API_BASE + '/api/v1/internal/reports/daily'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.SATRIA_INTERNAL_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({})}}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every day at 17 WIB": {
+      "main": [
+        [
+          {
+            "node": "Generate report in Laravel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

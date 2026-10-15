@@ -22,6 +22,8 @@ class AdminOperationsController extends Controller
 
         return response()->json(['data' => [
             'pending_orders' => DB::table('orders')->where('status', 'PENDING_APPROVAL')->count(),
+            'approved_today' => DB::table('orders')->where('status', 'APPROVED')->whereDate('reviewed_at', today())->count(),
+            'awb_issued_total' => DB::table('shipments')->count(),
             'pickup_pending' => DB::table('pickup_tasks')->whereIn('status', ['READY_FOR_PICKUP', 'ASSIGNED'])->count(),
             'ready_for_last_mile' => DB::table('shipments')->whereIn('status', ['READY_FOR_LAST_MILE', 'WAITING_REDELIVERY'])->count(),
             'active_runs' => DB::table('delivery_runs')->whereIn('status', ['PENDING_ACCEPT', 'ACCEPTED', 'OUT_FOR_DELIVERY'])->count(),
@@ -30,13 +32,132 @@ class AdminOperationsController extends Controller
         ]]);
     }
 
+    public function network(Request $request): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'OPS_ADMIN');
+        $coverages = DB::table('postal_coverages')->where('active', true)->orderBy('postcode')->get()
+            ->groupBy('zone_id');
+        $zones = DB::table('service_zones')->where('active', true)->orderBy('name')->get()
+            ->groupBy('hub_id');
+        $assignments = DB::table('courier_zones')->get()->groupBy('courier_user_id');
+        $couriers = DB::table('courier_profiles as courier')
+            ->join('users as user', 'user.id', '=', 'courier.user_id')
+            ->where('user.active', true)
+            ->get(['courier.*', 'user.name', 'user.phone'])->groupBy('home_hub_id');
+        $activeRuns = DB::table('delivery_runs')->whereIn('status', ['PENDING_ACCEPT', 'ACCEPTED', 'OUT_FOR_DELIVERY'])
+            ->get(['courier_user_id', 'status'])->groupBy('courier_user_id');
+        $activePickups = DB::table('pickup_assignments')->whereIn('status', ['PENDING_ACCEPT', 'ACCEPTED', 'IN_PROGRESS'])
+            ->get(['courier_user_id', 'status'])->groupBy('courier_user_id');
+        $courierIssues = DB::table('shipment_issues as issue')
+            ->join('delivery_attempts as attempt', 'attempt.id', '=', 'issue.delivery_attempt_id')
+            ->join('run_shipments as stop', 'stop.id', '=', 'attempt.run_shipment_id')
+            ->join('delivery_runs as run', 'run.id', '=', 'stop.run_id')
+            ->where('issue.status', 'OPEN')->select('run.courier_user_id')
+            ->selectRaw('COUNT(*) AS total')->groupBy('run.courier_user_id')
+            ->pluck('total', 'run.courier_user_id');
+        $operators = DB::table('user_roles as role')->join('users as user', 'user.id', '=', 'role.user_id')
+            ->where('role.role', 'HUB_OPERATOR')->where('user.active', true)
+            ->get(['role.hub_id', 'user.id', 'user.name'])->groupBy('hub_id');
+        $shipmentCounts = DB::table('shipments')->select('delivery_hub_id')
+            ->selectRaw("COUNT(*) AS total, COUNT(*) FILTER (WHERE status IN ('WAITING_SELLER_READY', 'READY_FOR_PICKUP', 'PICKUP_ASSIGNED')) AS before_pickup, COUNT(*) FILTER (WHERE status IN ('PICKED_UP', 'IN_TRANSIT')) AS inbound, COUNT(*) FILTER (WHERE status IN ('READY_FOR_LAST_MILE', 'WAITING_REDELIVERY', 'AT_HUB_AWAITING_DECISION', 'DELIVERY_ASSIGNED')) AS processing, COUNT(*) FILTER (WHERE status = 'OUT_FOR_DELIVERY') AS out_for_delivery, COUNT(*) FILTER (WHERE status = 'DELIVERED') AS delivered")
+            ->groupBy('delivery_hub_id')->get()->keyBy('delivery_hub_id');
+        $rows = DB::table('hubs')->where('active', true)->orderBy('name')->get()
+            ->map(function ($hub) use ($zones, $coverages, $assignments, $couriers, $operators, $shipmentCounts, $activeRuns, $activePickups, $courierIssues): array {
+                $counts = $shipmentCounts->get($hub->id);
+
+                return [
+                    'id' => $hub->id,
+                    'code' => $hub->code,
+                    'name' => $hub->name,
+                    'address' => $hub->address,
+                    'latitude' => $hub->latitude,
+                    'longitude' => $hub->longitude,
+                    'shipment_counts' => [
+                        'total' => (int) ($counts->total ?? 0),
+                        'before_pickup' => (int) ($counts->before_pickup ?? 0),
+                        'inbound' => (int) ($counts->inbound ?? 0),
+                        'processing' => (int) ($counts->processing ?? 0),
+                        'out_for_delivery' => (int) ($counts->out_for_delivery ?? 0),
+                        'delivered' => (int) ($counts->delivered ?? 0),
+                    ],
+                    'zones' => $zones->get($hub->id, collect())->map(function ($zone) use ($coverages): array {
+                        return [
+                            'id' => $zone->id,
+                            'code' => $zone->code,
+                            'name' => $zone->name,
+                            'coverages' => $coverages->get($zone->id, collect())->map(fn ($coverage): array => [
+                                'postcode' => $coverage->postcode,
+                                'purpose' => $coverage->purpose,
+                                'latitude' => $coverage->latitude,
+                                'longitude' => $coverage->longitude,
+                                'map_radius_meters' => $coverage->map_radius_meters,
+                            ])->values()->all(),
+                        ];
+                    })->values()->all(),
+                    'couriers' => $couriers->get($hub->id, collect())->map(function ($courier) use ($assignments, $activeRuns, $activePickups, $courierIssues): array {
+                        $runs = $activeRuns->get($courier->user_id, collect());
+                        $pickups = $activePickups->get($courier->user_id, collect());
+                        $issueCount = (int) ($courierIssues->get($courier->user_id) ?? 0);
+                        $status = $runs->contains('status', 'OUT_FOR_DELIVERY') ? 'MENGANTAR'
+                            : ($pickups->contains('status', 'IN_PROGRESS') ? 'PICKUP'
+                            : ($runs->isNotEmpty() || $pickups->isNotEmpty() ? 'MENUNGGU_TUGAS'
+                            : ($issueCount > 0 ? 'GANGGUAN' : ($courier->available ? 'READY' : 'TIDAK_TERSEDIA'))));
+
+                        return [
+                            'user_id' => $courier->user_id,
+                            'name' => $courier->name,
+                            'phone' => $courier->phone,
+                            'available' => $courier->available,
+                            'operational_status' => $status,
+                            'active_task_count' => $runs->count() + $pickups->count(),
+                            'open_issue_count' => $issueCount,
+                            'zones' => $assignments->get($courier->user_id, collect())->map(fn ($assignment): array => [
+                                'zone_id' => $assignment->zone_id,
+                                'service_type' => $assignment->service_type,
+                            ])->values()->all(),
+                        ];
+                    })->values()->all(),
+                    'operators' => $operators->get($hub->id, collect())->map(fn ($operator): array => [
+                        'id' => $operator->id, 'name' => $operator->name,
+                    ])->values()->all(),
+                ];
+            });
+
+        return response()->json(['data' => ['hubs' => $rows, 'updated_at' => now()->toIso8601String()]]);
+    }
+
     public function adminOrders(Request $request): JsonResponse
     {
         $this->satria->requireRole($request->user(), 'OPS_ADMIN');
         $status = $request->query('status');
         $rows = DB::table('orders')->when($status, fn ($query) => $query->where('status', $status))
             ->orderByDesc('created_at')->limit(100)->get()
-            ->map(fn ($order) => $this->satria->orderPayload($order));
+            ->map(function ($order): array {
+                $payload = $this->satria->orderPayload($order);
+                $assigned = DB::table('shipments as shipment')
+                    ->join('hubs as hub', 'hub.id', '=', 'shipment.delivery_hub_id')
+                    ->join('service_zones as zone', 'zone.id', '=', 'shipment.delivery_zone_id')
+                    ->where('shipment.order_id', $order->id)
+                    ->first(['hub.id', 'hub.name', 'zone.name as zone_name']);
+                if ($assigned) {
+                    $payload['destination_hub'] = [
+                        'id' => $assigned->id, 'name' => $assigned->name,
+                        'zone_name' => $assigned->zone_name, 'routing_basis' => 'ASSIGNED',
+                    ];
+                } else {
+                    $coverage = $this->satria->deliveryCoverage($order->destination_postcode,
+                        $order->destination_latitude === null ? null : (float) $order->destination_latitude,
+                        $order->destination_longitude === null ? null : (float) $order->destination_longitude);
+                    $payload['destination_hub'] = $coverage ? [
+                        'id' => $coverage->hub_id,
+                        'name' => $coverage->hub_name,
+                        'zone_name' => $coverage->zone_name,
+                        'routing_basis' => $order->destination_latitude === null ? 'POSTCODE_CENTER' : 'ADDRESS_COORDINATE',
+                    ] : null;
+                }
+
+                return $payload;
+            });
 
         return response()->json(['data' => $rows]);
     }
@@ -49,7 +170,6 @@ class AdminOperationsController extends Controller
             'length_mm' => ['nullable', 'integer', 'min:1', 'max:3000'],
             'width_mm' => ['nullable', 'integer', 'min:1', 'max:3000'],
             'height_mm' => ['nullable', 'integer', 'min:1', 'max:3000'],
-            'pickup_ready' => ['sometimes', 'boolean'],
         ]);
 
         $order = DB::transaction(function () use ($request, $id, $input): object {
@@ -62,24 +182,16 @@ class AdminOperationsController extends Controller
             abort_unless(DB::table('order_items')->where('order_id', $order->id)->exists(), 422, 'Item order kosong.');
             abort_unless(DB::table('seller_profiles')->where('user_id', $order->seller_user_id)
                 ->where('active', true)->exists(), 422, 'Toko sedang tidak aktif.');
-            $origin = DB::table('postal_coverages')->where('postcode', $order->origin_postcode)
-                ->where('purpose', 'ORIGIN')->where('active', true)->first();
-            $delivery = DB::table('postal_coverages')->where('postcode', $order->destination_postcode)
-                ->where('purpose', 'DELIVERY')->where('active', true)->first();
-            abort_if($origin === null || $delivery === null, 422, 'Kode pos asal atau tujuan belum tercakup.');
-            abort_unless(
-                DB::table('hubs')->whereIn('id', [$origin->hub_id, $delivery->hub_id])->where('active', true)->count()
-                    === count(array_unique([$origin->hub_id, $delivery->hub_id])),
-                422,
-                'Hub asal atau tujuan tidak aktif.'
-            );
+            $delivery = $this->satria->deliveryCoverage($order->destination_postcode,
+                $order->destination_latitude === null ? null : (float) $order->destination_latitude,
+                $order->destination_longitude === null ? null : (float) $order->destination_longitude);
+            abort_if($delivery === null, 422, 'Kode pos tujuan belum tercakup oleh hub aktif.');
 
             $weight = $input['weight_grams'] ?? $order->estimated_weight_grams;
             $length = $input['length_mm'] ?? $order->estimated_length_mm;
             $width = $input['width_mm'] ?? $order->estimated_width_mm;
             $height = $input['height_mm'] ?? $order->estimated_height_mm;
-            $ready = $input['pickup_ready'] ?? true;
-            $shipmentStatus = $ready ? 'READY_FOR_PICKUP' : 'WAITING_SELLER_READY';
+            $shipmentStatus = 'READY_FOR_PICKUP';
             $awb = $this->satria->uniqueAwb();
 
             DB::table('orders')->where('id', $order->id)->update([
@@ -88,8 +200,8 @@ class AdminOperationsController extends Controller
             ]);
             $shipmentId = DB::table('shipments')->insertGetId([
                 'order_id' => $order->id, 'awb' => $awb,
-                'origin_hub_id' => $origin->hub_id, 'delivery_hub_id' => $delivery->hub_id,
-                'pickup_zone_id' => $origin->zone_id, 'delivery_zone_id' => $delivery->zone_id,
+                'origin_hub_id' => $delivery->hub_id, 'delivery_hub_id' => $delivery->hub_id,
+                'pickup_zone_id' => $delivery->zone_id, 'delivery_zone_id' => $delivery->zone_id,
                 'status' => $shipmentStatus, 'custody_type' => 'SELLER',
                 'created_at' => now(), 'updated_at' => now(),
             ]);
@@ -100,7 +212,7 @@ class AdminOperationsController extends Controller
             ]);
             $planId = DB::table('route_plans')->insertGetId([
                 'shipment_id' => $shipmentId, 'version' => 1,
-                'active' => true, 'change_reason' => 'Rute demo langsung ke hub tujuan',
+                'active' => true, 'change_reason' => 'Pickup toko menuju satu hub operasional',
                 'created_at' => now(),
             ]);
             DB::table('route_stops')->insert([
@@ -110,7 +222,7 @@ class AdminOperationsController extends Controller
             DB::table('pickup_tasks')->insert([
                 'shipment_id' => $shipmentId,
                 'status' => $shipmentStatus,
-                'ready_at' => $ready ? now() : null,
+                'ready_at' => now(),
                 'created_at' => now(),
             ]);
             $eventId = $this->satria->event($shipmentId, $request->user()->id, 'AWB_GENERATED', $shipmentStatus, [
@@ -118,29 +230,12 @@ class AdminOperationsController extends Controller
             ]);
             $this->satria->notifyUser(
                 $eventId, $shipmentId, $order->customer_id, 'BUYER', 'AWB_GENERATED',
-                "Pesanan {$order->order_no} disetujui. Resi Anda: {$awb}. Lacak di aplikasi Satria."
+                "Pesanan {$order->order_no} disetujui. Resi Anda: {$awb}. Lacak di aplikasi Anteraja."
             );
+            $this->satria->notifyRoleAtHub($eventId, $shipmentId, 'HUB_OPERATOR', $delivery->hub_id,
+                'PICKUP_READY', "Resi {$awb} siap dijemput. Atur kurir pickup dari hub Anda.");
 
             return DB::table('orders')->where('id', $order->id)->first();
-        });
-
-        return response()->json(['data' => $this->satria->orderPayload($order)]);
-    }
-
-    public function rejectOrder(Request $request, int $id): JsonResponse
-    {
-        $this->satria->requireRole($request->user(), 'OPS_ADMIN');
-        $input = $request->validate(['reason' => ['required', 'string', 'max:1000']]);
-        $order = DB::transaction(function () use ($request, $id, $input): object {
-            $order = DB::table('orders')->where('id', $id)->lockForUpdate()->first();
-            abort_if($order === null, 404);
-            abort_unless($order->status === 'PENDING_APPROVAL', 409, 'Order sudah diproses.');
-            DB::table('orders')->where('id', $id)->update([
-                'status' => 'REJECTED', 'rejection_reason' => $input['reason'],
-                'reviewed_by' => $request->user()->id, 'reviewed_at' => now(), 'updated_at' => now(),
-            ]);
-
-            return DB::table('orders')->where('id', $id)->first();
         });
 
         return response()->json(['data' => $this->satria->orderPayload($order)]);
@@ -161,83 +256,6 @@ class AdminOperationsController extends Controller
             });
 
         return response()->json(['data' => $rows]);
-    }
-
-    public function markPickupReady(Request $request, int $id): JsonResponse
-    {
-        $this->satria->requireRole($request->user(), 'OPS_ADMIN');
-        $task = DB::transaction(function () use ($request, $id): object {
-            $task = DB::table('pickup_tasks')->where('id', $id)->lockForUpdate()->first();
-            abort_if($task === null, 404);
-            if ($task->status === 'READY_FOR_PICKUP') {
-                return $task;
-            }
-            abort_unless($task->status === 'WAITING_SELLER_READY', 409, 'Pickup tidak dapat ditandai siap.');
-            DB::table('pickup_tasks')->where('id', $id)->update(['status' => 'READY_FOR_PICKUP', 'ready_at' => now()]);
-            DB::table('shipments')->where('id', $task->shipment_id)->update([
-                'status' => 'READY_FOR_PICKUP', 'updated_at' => now(),
-            ]);
-            $this->satria->event($task->shipment_id, $request->user()->id, 'SELLER_READY', 'READY_FOR_PICKUP');
-
-            return DB::table('pickup_tasks')->where('id', $id)->first();
-        });
-
-        return response()->json(['data' => $task]);
-    }
-
-    public function assignPickup(Request $request, int $id): JsonResponse
-    {
-        $this->satria->requireRole($request->user(), 'OPS_ADMIN');
-        $input = $request->validate([
-            'courier_user_id' => ['required', 'integer', 'exists:courier_profiles,user_id'],
-            'scheduled_at' => ['nullable', 'date'],
-        ]);
-        $assignment = DB::transaction(function () use ($request, $id, $input): object {
-            $task = DB::table('pickup_tasks')->where('id', $id)->lockForUpdate()->first();
-            abort_if($task === null, 404);
-            abort_unless($task->status === 'READY_FOR_PICKUP', 409, 'Paket belum siap pickup.');
-            $shipment = DB::table('shipments')->where('id', $task->shipment_id)->lockForUpdate()->first();
-            $courier = DB::table('courier_profiles')->where('user_id', $input['courier_user_id'])
-                ->lockForUpdate()->first();
-            abort_unless($courier?->available && DB::table('users')->where('id', $courier->user_id)
-                ->where('active', true)->exists(), 422, 'Kurir tidak tersedia.');
-            abort_unless(DB::table('courier_zones')->where('courier_user_id', $courier->user_id)
-                ->where('zone_id', $shipment->pickup_zone_id)->where('service_type', 'PICKUP')->exists(),
-                422, 'Kurir tidak melayani zona pickup.');
-            $weight = DB::table('parcels')->where('shipment_id', $shipment->id)->sum('weight_grams');
-            $activeShipments = DB::table('pickup_assignments as a')
-                ->join('pickup_tasks as t', 't.id', '=', 'a.pickup_task_id')
-                ->where('a.courier_user_id', $courier->user_id)
-                ->whereIn('a.status', ['PENDING_ACCEPT', 'ACCEPTED', 'IN_PROGRESS'])
-                ->pluck('t.shipment_id');
-            $activeWeight = DB::table('parcels')->whereIn('shipment_id', $activeShipments)
-                ->sum('weight_grams');
-            abort_if($activeShipments->count() + 1 > $courier->max_parcels ||
-                $activeWeight + $weight > $courier->max_weight_grams,
-                422, 'Jumlah atau berat pickup melebihi kapasitas kurir.');
-            $assignmentId = DB::table('pickup_assignments')->insertGetId([
-                'pickup_task_id' => $task->id,
-                'courier_user_id' => $courier->user_id,
-                'assigned_by' => $request->user()->id,
-                'status' => 'PENDING_ACCEPT',
-                'scheduled_at' => $input['scheduled_at'] ?? null,
-                'assigned_at' => now(),
-            ]);
-            DB::table('pickup_tasks')->where('id', $task->id)->update(['status' => 'ASSIGNED']);
-            DB::table('shipments')->where('id', $shipment->id)->update([
-                'status' => 'PICKUP_ASSIGNED', 'updated_at' => now(),
-            ]);
-            $eventId = $this->satria->event($shipment->id, $request->user()->id, 'PICKUP_ASSIGNED', 'PICKUP_ASSIGNED');
-            $this->satria->notifyUser($eventId, $shipment->id, $courier->user_id,
-                'COURIER', 'PICKUP_ASSIGNED', "Tugas pickup baru untuk resi {$shipment->awb}. Buka aplikasi kurir.");
-            $order = DB::table('orders')->where('id', $shipment->order_id)->first();
-            $this->satria->notifyUser($eventId, $shipment->id, $order->seller_user_id,
-                'SELLER', 'PICKUP_SCHEDULED', "Pickup resi {$shipment->awb} sudah dijadwalkan. Siapkan paket di toko.");
-
-            return DB::table('pickup_assignments')->where('id', $assignmentId)->first();
-        });
-
-        return response()->json(['data' => $assignment], 201);
     }
 
     public function adminCouriers(Request $request): JsonResponse
@@ -273,52 +291,6 @@ class AdminOperationsController extends Controller
             });
 
         return response()->json(['data' => $rows]);
-    }
-
-    public function issueDecision(Request $request, int $id): JsonResponse
-    {
-        $this->satria->requireRole($request->user(), 'OPS_ADMIN');
-        $input = $request->validate([
-            'decision' => ['required', Rule::in(['RESCHEDULE', 'RETURN_TO_SELLER'])],
-            'scheduled_redelivery_at' => ['required_if:decision,RESCHEDULE', 'nullable', 'date', 'after_or_equal:today'],
-            'note' => ['nullable', 'string', 'max:1000'],
-        ]);
-        $issue = DB::transaction(function () use ($request, $id, $input): object {
-            $issue = DB::table('shipment_issues')->where('id', $id)->lockForUpdate()->first();
-            abort_if($issue === null, 404);
-            if ($issue->status === 'RESOLVED') {
-                abort_unless($issue->decision === $input['decision'], 409, 'Keputusan sudah dibuat.');
-
-                return $issue;
-            }
-            $shipment = DB::table('shipments')->where('id', $issue->shipment_id)->lockForUpdate()->first();
-            abort_unless($shipment->status === 'AT_HUB_AWAITING_DECISION' &&
-                $shipment->custody_type === 'HUB', 409, 'Paket harus kembali dan di-scan di hub.');
-            $nextStatus = $input['decision'] === 'RESCHEDULE' ? 'WAITING_REDELIVERY' : 'RETURN_REQUESTED';
-            DB::table('shipment_issues')->where('id', $id)->update([
-                'status' => 'RESOLVED', 'decision' => $input['decision'],
-                'decision_note' => $input['note'] ?? null,
-                'scheduled_redelivery_at' => $input['scheduled_redelivery_at'] ?? null,
-                'decided_by' => $request->user()->id, 'decided_at' => now(),
-            ]);
-            DB::table('shipments')->where('id', $shipment->id)->update([
-                'status' => $nextStatus, 'updated_at' => now(),
-            ]);
-            $eventType = $input['decision'] === 'RESCHEDULE' ? 'REDELIVERY_SCHEDULED' : 'RETURN_REQUESTED';
-            $eventId = $this->satria->event($shipment->id, $request->user()->id,
-                $eventType, $nextStatus, ['scheduled_at' => $input['scheduled_redelivery_at'] ?? null],
-                $shipment->delivery_hub_id);
-            $order = DB::table('orders')->where('id', $shipment->order_id)->first();
-            $message = $input['decision'] === 'RESCHEDULE'
-                ? "Resi {$shipment->awb} dijadwalkan untuk pengantaran ulang. Pantau status di aplikasi."
-                : "Resi {$shipment->awb} diajukan untuk dikembalikan ke toko.";
-            $this->satria->notifyUser($eventId, $shipment->id, $order->customer_id,
-                'BUYER', $eventType, $message);
-
-            return DB::table('shipment_issues')->where('id', $id)->first();
-        });
-
-        return response()->json(['data' => $issue]);
     }
 
     public function attempts(Request $request, int $id): JsonResponse

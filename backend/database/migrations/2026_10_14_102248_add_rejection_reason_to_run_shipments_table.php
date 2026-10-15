@@ -1,0 +1,24 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        if (! Schema::hasColumn('run_shipments', 'rejection_reason')) {
+            Schema::table('run_shipments', function (Blueprint $table) {
+                $table->text('rejection_reason')->nullable();
+            });
+        }
+    }
+
+    public function down(): void
+    {
+        Schema::table('run_shipments', function (Blueprint $table) {
+            $table->dropColumn('rejection_reason');
+        });
+    }
+};

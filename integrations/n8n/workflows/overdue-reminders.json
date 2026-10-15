@@ -1,0 +1,137 @@
+{
+  "name": "Satria - Remind overdue tasks",
+  "nodes": [
+    {
+      "id": "462a42b0-b135-40e1-a579-4513910bfab4",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "a9264a14-ae8d-4326-a540-8a07b371e91e",
+      "name": "Get overdue tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "url": "={{$env.SATRIA_API_BASE + '/api/v1/internal/tasks/overdue'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.SATRIA_INTERNAL_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "id": "fc2d714f-5003-4147-a1df-f528188eaaf2",
+      "name": "One item per task",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const tasks = $input.first().json.tasks ?? [];\nif (!Array.isArray(tasks)) throw new Error('tasks must be an array');\nreturn tasks.filter(task => Number.isSafeInteger(Number(task.id)) && Number(task.id) > 0 &&\n    ['pickup_assignment', 'delivery_run'].includes(task.type))\n  .map(task => ({ json: { id: Number(task.id), type: task.type } }));"
+      }
+    },
+    {
+      "id": "02f4eca2-62ae-49f6-a631-b3a1a175dac7",
+      "name": "Remind through Laravel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SATRIA_API_BASE + '/api/v1/internal/tasks/' + $json.id + '/remind'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.SATRIA_INTERNAL_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({type:$json.type})}}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Get overdue tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get overdue tasks": {
+      "main": [
+        [
+          {
+            "node": "One item per task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per task": {
+      "main": [
+        [
+          {
+            "node": "Remind through Laravel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

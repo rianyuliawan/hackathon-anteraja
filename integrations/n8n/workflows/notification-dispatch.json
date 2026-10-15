@@ -1,0 +1,239 @@
+{
+  "name": "Satria - Dispatch notification",
+  "nodes": [
+    {
+      "id": "5058fc1e-85d9-4522-a25a-2214fa7e6a56",
+      "name": "Notification webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "satria-notifications",
+        "authentication": "none",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "fa4bc639-8fc0-4cee-a98c-ab6ced002495"
+    },
+    {
+      "id": "5746ff41-d660-45c6-a98c-700d9fd57f7c",
+      "name": "Validate notification ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const request = $input.first().json;\nconst provided = request.headers?.['x-satria-webhook-token'];\nif (!provided || provided !== $env.SATRIA_WEBHOOK_TOKEN) throw new Error('Unauthorized webhook');\nconst body = request.body ?? {};\nconst id = Number(body.notification_id);\nif (!Number.isSafeInteger(id) || id < 1) throw new Error('notification_id must be a positive integer');\nreturn [{ json: { notification_id: id } }];"
+      }
+    },
+    {
+      "id": "3017e069-6521-40ae-a05d-41caa1989ebd",
+      "name": "Claim notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SATRIA_API_BASE + '/api/v1/internal/notifications/' + $json.notification_id + '/claim'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.SATRIA_INTERNAL_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({})}}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "9f9efbd9-8b0f-40c0-a41a-e6a840f24741",
+      "name": "Only claimed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const claim = $input.first().json;\nif (claim.claimed !== true || !claim.notification) return [];\nconst item = claim.notification;\nif (!['MOCK', 'LIVE'].includes(item.delivery_mode) || item.channel !== 'TELEGRAM') {\n  throw new Error('Unsupported notification mode or channel');\n}\nreturn [{ json: item }];"
+      }
+    },
+    {
+      "id": "403cba12-eea2-4e04-a424-800e80d0ac8d",
+      "name": "Send via adapter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{($json.sender_profile === 'COURIER' ? $env.SATRIA_COURIER_ADAPTER_URL : $env.SATRIA_ADAPTER_URL) + '/send'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$json.sender_profile === 'COURIER' ? $env.SATRIA_COURIER_ADAPTER_TOKEN : $env.SATRIA_ADAPTER_TOKEN}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({request_id:String($json.id),mode:$json.delivery_mode,peer_id:$json.peer_id,phone:$json.phone,text:$json.message,sender_profile:$json.sender_profile})}}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ce7b9fad-dc7f-4ead-a48c-074491c501c9",
+      "name": "Normalize send result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nlet body = raw.body ?? raw;\nif (typeof body === 'string') {\n  try { body = JSON.parse(body); } catch { body = { error: body }; }\n}\nconst source = $('Only claimed').first().json;\nconst live = source.delivery_mode === 'LIVE';\nconst sent = live && body.ok === true && body.status === 'SENT' && body.provider_message_id && body.sent_at;\nconst simulated = !live && body.ok === true && body.status === 'SIMULATED';\nconst status = sent ? 'SENT' : simulated ? 'SIMULATED' : 'FAILED';\nreturn [{ json: {\n  notification_id: source.id,\n  status,\n  provider_message_id: sent ? String(body.provider_message_id) : null,\n  sent_at: sent ? body.sent_at : null,\n  destination: live ? String(source.peer_id ?? source.phone ?? '') : null,\n  error: status === 'FAILED' ? String(body.error?.message ?? body.error ?? ('Adapter HTTP ' + (raw.statusCode ?? 'unknown'))) : null,\n} }];"
+      }
+    },
+    {
+      "id": "8fdcab0e-6ab8-4c2b-a167-a3548376e5d4",
+      "name": "Record result in Laravel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SATRIA_API_BASE + '/api/v1/internal/notifications/' + $json.notification_id + '/result'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{$env.SATRIA_INTERNAL_TOKEN}}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{\"notification-result-\" + $json.notification_id + \"-\" + $json.status}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{JSON.stringify({status:$json.status,provider_message_id:$json.provider_message_id,sent_at:$json.sent_at,destination:$json.destination,error:$json.error})}}",
+        "options": {
+          "timeout": 15000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Notification webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate notification ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate notification ID": {
+      "main": [
+        [
+          {
+            "node": "Claim notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim notification": {
+      "main": [
+        [
+          {
+            "node": "Only claimed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only claimed": {
+      "main": [
+        [
+          {
+            "node": "Send via adapter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via adapter": {
+      "main": [
+        [
+          {
+            "node": "Normalize send result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize send result": {
+      "main": [
+        [
+          {
+            "node": "Record result in Laravel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

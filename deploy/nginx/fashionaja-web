@@ -1,0 +1,11 @@
+server {
+    listen 80;
+    server_name katalog-fashionaja.rianyuliawan.my.id;
+    root /srv/hackathon-anteraja/apps/catalog/dist;
+    index index.html;
+
+    location = /manifest.webmanifest { types { application/manifest+json webmanifest; } }
+
+    location / { try_files $uri $uri/ /index.html; }
+    location ~ /\.(?!well-known).* { deny all; }
+}
