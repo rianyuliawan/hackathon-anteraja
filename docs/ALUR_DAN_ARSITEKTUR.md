@@ -1,41 +1,66 @@
 # Alur bisnis dan arsitektur
 
-Dokumen ini menjelaskan hubungan dua aplikasi, satu backend, dan satu database. Lihat [PRD](PRD.md), [FRD](FRD.md), dan [ERD](ERD.md).
+Dokumen ini menjelaskan aliran data yang sudah diterapkan. Kebutuhan produk ada di [PRD](PRD.md), perilaku per peran di [FRD](FRD.md), dan relasi data di [ERD](ERD.md).
 
-## Komponen
+## Aplikasi dan komponen
 
 ```mermaid
 flowchart LR
-  CAT[Fashionaja React PWA] --> API[Laravel API]
-  OPS[Anteraja React PWA] --> API
+  BUYER[Pelanggan] --> CAT[Fashionaja<br/>React PWA]
+  BUYER --> OPS[Anteraja<br/>React PWA]
+  ADMIN[Ops admin, operator hub, kurir] --> OPS
+  CAT --> API[Laravel API]
+  OPS --> API
   API --> DB[(PostgreSQL)]
-  API --> FILE[(Foto privat)]
-  API --> N8N[n8n]
+  API --> PHOTO[(Foto privat)]
+  OPS --> MAP[Leaflet + OpenStreetMap]
+  API --> ROUTE[OSRM / fallback koordinat]
+  API --> OUTBOX[Outbox notifikasi]
+  OUTBOX --> N8N[n8n]
   N8N --> API
-  N8N --> TA[Adapter Telegram admin]
-  N8N --> TC[Adapter Telegram kurir]
-  OPS --> MAP[Leaflet / OpenStreetMap]
-  API --> OSRM[OSRM jalan, bila tersedia]
+  N8N --> TGA[Adapter Telegram admin]
+  N8N --> TGC[Adapter Telegram kurir]
 ```
 
-Fashionaja dan Anteraja adalah dua frontend yang dapat dibangun dan dideploy sendiri, tetapi keduanya memanggil Laravel yang sama. Frontend tidak menulis PostgreSQL langsung. Laravel adalah pemilik validasi, role, transaksi status, foto, dan outbox; n8n tidak mengubah shipment. Cookie/CSRF/CORS harus diatur untuk dua subdomain. Implementasi memakai sesi Laravel per tab agar pengguna dapat menguji role berbeda secara bersamaan.
+| Lapisan | Teknologi dan tanggung jawab |
+| --- | --- |
+| Fashionaja | React, TypeScript, Vite, Tailwind CSS, React Router, PWA; katalog baju, checkout, dan riwayat pesanan. |
+| Anteraja | Stack frontend yang sama; pelacakan pelanggan serta antarmuka ops admin, operator hub, dan kurir. Leaflet/OpenStreetMap menampilkan hub, cakupan, dan perjalanan per stop. |
+| Backend | Laravel API mengelola login, pemeriksaan role, validasi, transaksi status, perencanaan run, izin foto, riwayat, dan laporan XLSX. |
+| Data | Satu PostgreSQL untuk kedua frontend. Foto berada di storage privat; database menyimpan referensi file. |
+| Rute | OSRM memberi jarak/lintasan jalan bila tersedia; aplikasi memiliki fallback koordinat. Urutan paket juga memperhatikan usia paket dan prioritas antar ulang. |
+| Otomasi | Laravel membuat notifikasi di outbox; empat workflow n8n menangani dispatch, pemulihan antrean, pengingat tugas, dan laporan harian. Adapter Telegram menggunakan sesi pengirim yang tersimpan privat. |
 
-## Dari checkout sampai hub
+Kedua aplikasi dapat dipasang sebagai PWA dan dideploy terpisah: `katalog-fashionaja.rianyuliawan.my.id` dan `hackathon-anteraja.rianyuliawan.my.id`. Keduanya memanggil Laravel yang sama; frontend tidak mengakses PostgreSQL langsung. Sesi aplikasi disimpan per tab sehingga login role berbeda pada tab lain tidak menimpa sesi ini. Pemeriksaan hak akses tetap dilakukan server. Waktu aplikasi dan koneksi database menggunakan `Asia/Jakarta`, lalu ditampilkan sebagai WIB.
 
-1. Buyer register/login dan checkout baju di Fashionaja. Server mengambil toko dan produk dari database, lalu menyimpan order `PENDING_APPROVAL` dengan snapshot penerima dan asal toko.
-2. Ops admin menyetujui order. Laravel memilih hub dari cakupan kode pos tujuan, menetapkan hub yang sama sebagai hub asal/tujuan dalam alur MVP, lalu menerbitkan AWB dan pickup task. Banyak hub ada di master data; setiap paket hanya melewati satu hub.
-3. Operator hub melihat tugas baru, memilih kurir pickup sesuai area/ketersediaan. Kurir menerima, mengambil foto baru, dan mengonfirmasi AWB. Operator menandai paket telah tiba di hub dengan tombol/nomor resi, tanpa perangkat pemindai.
+## Checkout sampai paket tiba di hub
 
-## Last mile dan gagal kirim
+1. Pembeli login atau mendaftar, memilih baju, lalu checkout di Fashionaja. Laravel menyimpan order dan item dengan snapshot produk, toko, nama, nomor telepon, dan alamat tujuan. Status awal `PENDING_APPROVAL`; belum ada AWB. `checkout_key` menjaga permintaan ulang agar tidak membuat order ganda.
+2. Ops admin menyetujui order. Laravel memvalidasi berat, dimensi, dan cakupan kode pos, memilih hub/zona tujuan secara otomatis, menerbitkan AWB 14 digit, membuat shipment, parcel, tugas pickup, dan tracking event dalam satu transaksi. Persetujuan ulang tidak menerbitkan AWB baru. Fashionaja menampilkan AWB di detail pesanan tanpa membuka fitur tracking logistik.
+3. Operator hub terpilih menugaskan kurir pickup yang sesuai area. Kurir menerima tugas, mengambil paket dari toko, dan mengambil foto baru lewat kamera. Operator hub mengonfirmasi paket fisik tiba melalui daftar atau pencarian AWB; scanner fisik tidak diperlukan.
+4. Ada beberapa hub di master data Jakarta, tetapi satu shipment dalam alur saat ini dikoordinasikan oleh satu hub yang sama untuk pickup dan delivery. Transit antarahub belum menjadi langkah operasional aktif.
 
-1. Operator memilih paket siap antar, zona, tanggal/jam, dan kurir. Sistem memberi pratinjau urutan yang memperhatikan rute jalan, usia paket, retry, serta kelayakan area/kapasitas. Operator dapat meninjau sebelum membuat run.
-2. Kurir menerima semua atau menerima/menolak paket tertentu dengan alasan. Penolakan kembali ke antrean operator; belum ada delivery attempt. Untuk paket yang diterima, operator mengonfirmasi serah terima fisik; kurir lalu mulai pengantaran.
-3. Aplikasi kurir menampilkan peta segmen per stop. Di lokasi, kurir mencatat nama penerima dan foto kamera jika berhasil, atau alasan jika gagal. Server menyimpan satu attempt per hasil; bukti, aktor, waktu, dan status masuk ke riwayat.
-4. Paket gagal masih bersama kurir sampai hub mengonfirmasi retur. Operator hub melihat kendala, berkomunikasi dengan pelanggan melalui kanal yang tersedia, dan memutuskan jadwal ulang/return. Pada reschedule, paket masuk antrean lagi, lalu dibuat run baru pada AWB yang sama.
-5. Pelanggan mencari AWB di Anteraja. Pratinjau dan halaman detail terpisah; detail memuat timeline, attempt, bukti foto sesuai izin, serta konfirmasi penerimaan atau jadwal ulang pada status yang relevan. Fashionaja tetap hanya menampilkan pesanan dan nomor AWB.
+## Pengantaran, penolakan, dan gagal kirim
 
-## Notifikasi dan laporan
+1. Operator hub memilih beberapa paket siap antar dalam zona yang sesuai, melihat usia paket dan rekomendasi urutan, menentukan kurir yang tersedia, lalu membuat satu run. Pemeriksaan server mencegah tugas aktif ganda dan kurir di luar cakupan/kapasitas.
+2. Kurir menerima seluruh run atau menerima/menolak paket satu per satu. Penolakan paket wajib beralasan dan kembali ke antrean operator; penolakan sebelum berangkat **tidak** menambah nomor percobaan. Operator mengonfirmasi serah terima fisik untuk paket yang diterima.
+3. Kurir memulai run. Peta menampilkan segmen hub ke stop pertama, lalu stop sebelumnya ke stop berikutnya. Di tiap alamat, kurir mencatat nama penerima dan foto kamera bila berhasil, atau alasan dan catatan bila gagal. Setiap kunjungan menghasilkan `delivery_attempts` serta event riwayat.
+4. Paket gagal tetap dalam penguasaan kurir sampai operator hub mengonfirmasi pengembalian fisik. Operator hub kemudian mencatat tindak lanjut: jadwal ulang atau permintaan retur. Jika dijadwalkan ulang, paket masuk kembali ke antrean run dengan **AWB yang sama**; percobaan sebelumnya tetap tersimpan.
+5. Pelanggan memasukkan hingga 10 AWB pada Anteraja. Hasil awal berupa kartu pratinjau yang seluruhnya dapat dibuka; detailnya menampilkan status, waktu WIB, nama kurir, alasan penolakan/gagal kirim, catatan, riwayat percobaan, dan foto yang diizinkan. Tombol perbarui status mengambil kondisi terkini tanpa menghapus AWB yang sedang dibuka.
 
-Laravel mencatat event serta notifikasi dalam database. n8n menerima webhook setelah commit dan menyapu antrean tertinggal; adapter MTProto memakai sesi akun pribadi admin atau kurir sesuai jenis pesan. Telegram LIVE dibatasi daftar email penerima; nomor telepon pelanggan dapat dipakai sebagai tujuan tanpa pairing terlebih dahulu, tetapi keberhasilan bergantung pada akun/privasi Telegram. Hanya hasil provider yang sah dicatat `SENT`; MOCK menjadi `SIMULATED`. Pelanggan tetap dapat melihat status di aplikasi ketika pesan gagal.
+| Tahap | Pemegang paket setelah tahap tersebut |
+| --- | --- |
+| Sebelum pickup | Toko/pengirim |
+| Pickup berhasil dengan foto | Kurir pickup |
+| Hub mengonfirmasi kedatangan | Hub |
+| Operator menyerahkan run dan kurir mulai | Kurir delivery |
+| Pengantaran gagal | Kurir delivery, hingga retur fisik dikonfirmasi hub |
+| Pengantaran berhasil | Penerima |
 
-Laporan per hub/hari dapat disegarkan dari UI dan diekspor XLSX. `delivery_attempts` menyimpan banyak percobaan untuk satu AWB, sedangkan angka paket tidak digandakan. Foto berada di storage privat dan diakses melalui endpoint yang memeriksa hubungan user dengan shipment. Hub/zona/cakupan adalah data yang dapat ditambah, tetapi pemilihan hub saat ini memakai cakupan kode pos demo dan belum menangani transit antarahub.
+## Notifikasi, audit, dan laporan
+
+Laravel mencatat perubahan status, tracking event, dan outbox notifikasi. n8n mengirim pesan melalui adapter tanpa menjadi pengambil keputusan status shipment. Pesan LIVE hanya dinyatakan `SENT` setelah provider mengonfirmasi; mode MOCK berakhir `SIMULATED`, dan kegagalan provider dicatat `FAILED` tanpa membatalkan proses paket. Nomor pelanggan dapat dicoba sebagai tujuan Telegram tanpa pairing, tetapi keberhasilannya bergantung pada akun dan pengaturan privasi penerima; daftar email LIVE membatasi pengiriman saat pengujian.
+
+Ekspor workflow tersedia sebagai [dispatch notifikasi](../integrations/n8n/workflows/notification-dispatch.json), [pemulihan notifikasi](../integrations/n8n/workflows/pending-notifications.json), [pengingat tugas](../integrations/n8n/workflows/overdue-reminders.json), dan [laporan harian](../integrations/n8n/workflows/daily-report.json). Workflow laporan dijadwalkan pukul 17.00 WIB; dashboard operator hub juga menyediakan penyegaran manual dan unduhan XLSX. Kode Laravel tetap menjadi sumber angka laporan serta log status notifikasi.
+
+Operator hub dapat menyegarkan ringkasan harian dan mengekspor XLSX berisi aktivitas serta percobaan. Ops admin dapat memantau ringkasan lintas hub. Tracking event dan delivery attempt tidak ditimpa. Koreksi waktu untuk event historis lama disimpan pada `tracking_event_time_corrections`; pembacaan tracking dan laporan memakai waktu efektif tersebut sementara baris audit asli tetap utuh.

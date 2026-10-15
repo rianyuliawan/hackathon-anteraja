@@ -1,28 +1,35 @@
 # PRD — Fashionaja dan Anteraja
 
-**Status:** menggambarkan implementasi proyek saat ini (15 Oktober 2026). Kasus utama hackathon adalah penugasan kurir last mile, gagal kirim, pengembalian ke hub, pengiriman ulang dengan AWB yang sama, riwayat percobaan, dan laporan. Katalog dan pickup melengkapi alur dari pesanan hingga paket siap diantar. Rincian perilaku ada di [FRD](FRD.md) dan [alur bisnis](ALUR_DAN_ARSITEKTUR.md).
+**Kondisi produk per 15 Oktober 2026.** Fokus hackathon adalah pengantaran last mile: pembagian paket kepada kurir sesuai area, penolakan tugas, gagal kirim, pengembalian ke hub, pengiriman ulang pada AWB yang sama, dokumentasi riwayat, dan laporan harian. [Alur dan arsitektur](ALUR_DAN_ARSITEKTUR.md), [FRD](FRD.md), serta [ERD](ERD.md) menjabarkan implementasinya.
 
-## Produk dan pengguna
+## Tujuan dan pengguna
 
-- **Fashionaja** adalah aplikasi katalog baju tersendiri. Pembeli mendaftar, login, memilih produk, checkout tanpa pembayaran, melihat riwayat pesanan, dan menyalin AWB setelah terbit. Antarmukanya tidak menyajikan pelacakan logistik.
-- **Anteraja** adalah aplikasi kedua untuk pelanggan melacak AWB, ops admin menyetujui pesanan, operator hub mengelola paket/kurir, dan kurir menangani pickup serta delivery. Kedua frontend memakai satu Laravel API dan PostgreSQL; Fashionaja tidak memiliki database terpisah.
-- Hanya pelanggan (`BUYER`) dapat mendaftar publik. Akun `OPS_ADMIN`, `HUB_OPERATOR`, dan `COURIER` disiapkan melalui seed atau dibuat internal. Login mengarahkan ke halaman sesuai role; server tetap memeriksa hak akses pada setiap permintaan.
-- Kedua frontend responsif dan dapat dipasang sebagai PWA pada browser/perangkat yang mendukung instalasi. Kamera kurir pada HP membutuhkan HTTPS atau localhost.
+| Pengguna | Kebutuhan |
+| --- | --- |
+| Pembeli/pelanggan | Berbelanja baju di Fashionaja, menerima AWB setelah pesanan diproses, lalu melacak AWB di Anteraja dan melihat bukti/riwayat pengiriman yang menjadi haknya. |
+| Ops admin | Meninjau pesanan, menyetujui dan menerbitkan AWB, serta memantau ringkasan hub. |
+| Operator hub | Menangani pickup dan kedatangan paket, menyusun run yang masuk akal, mengatur serah terima, menangani penolakan dan gagal kirim, serta membuat laporan harian. |
+| Kurir pickup/delivery | Menerima tugas, mengambil foto lewat kamera, mengikuti urutan stop, dan mencatat hasil kunjungan. Kedua jenis pekerjaan menggunakan role kurir dengan cakupan layanan berbeda. |
 
-## Alur bisnis inti
+Fashionaja merupakan katalog pihak ketiga secara tampilan dan domain, tetapi dalam proyek ini kedua frontend memakai **satu Laravel API dan satu PostgreSQL**. Hanya pembeli yang dapat mendaftar publik. Akun internal dibuat lewat proses internal/seed. Kedua frontend responsif dan dapat dipasang sebagai PWA; pengambilan foto kamera pada HP memerlukan HTTPS atau localhost.
 
-1. Checkout membuat order `PENDING_APPROVAL` tanpa AWB. Nama, telepon, alamat, produk, dan harga tersimpan sebagai snapshot. Idempotensi `checkout_key` mencegah duplikasi ketika permintaan diulang.
-2. Ops admin meninjau dan **menyetujui** order, mengonfirmasi berat/dimensi. Sistem memilih hub dan zona dari cakupan kode pos tujuan, menerbitkan AWB internal unik 14 digit berawalan `11`, lalu membuat shipment dan tugas pickup. Antarmuka ops admin saat ini tidak memiliki aksi tolak. Order tanpa cakupan tidak bisa disetujui.
-3. Hub yang terpilih mengatur kurir pickup. Kurir menerima tugas, mengambil paket di toko, dan mengambil **foto baru melalui kamera**. Operator hub mengonfirmasi paket yang tiba; selama MVP satu shipment hanya melewati hub penanganan itu, tanpa transit antarahub. Hub yang sama menjadi hub pickup dan delivery pada data operasional.
-4. Operator hub memilih paket siap antar yang cocok dengan zona dan kapasitas kurir. Pratinjau run memberi saran urutan berdasarkan jalan bila layanan rute tersedia, serta usia paket dan prioritas retry. Operator menentukan kurir, urutan, dan jadwal. Kurir dapat menerima semua paket atau menerima/menolak per paket dengan alasan. Penolakan sebelum berangkat tidak membuat delivery attempt.
-5. Setelah kurir menerima, operator mengonfirmasi serah terima. Kurir menekan mulai, mengikuti peta per stop, lalu untuk setiap paket mencatat penerima dan foto kamera bila berhasil, atau alasan bila gagal. Peta adalah panduan rute; aplikasi tidak melacak posisi GPS kurir secara langsung.
-6. Paket gagal tetap dalam custody kurir sampai operator hub mengonfirmasi pengembalian fisik. **Operator hub** memutuskan jadwal ulang atau return, lalu dapat membuat run baru pada **AWB yang sama**. Setiap hasil kunjungan tersimpan sebagai attempt baru; riwayat sebelumnya tidak ditimpa. Pelanggan dapat melihat timeline, bukti foto yang diizinkan, dan mengonfirmasi penerimaan atau jadwal ulang sesuai status.
-7. Operator hub dapat melihat riwayat dan mengekspor laporan harian XLSX; ops admin memantau pesanan/resi dan ringkasan operasional.
+## Hasil produk yang diharapkan
 
-## Notifikasi dan batasannya
+1. Checkout menyimpan order `PENDING_APPROVAL` tanpa AWB. Data profil pembeli, tujuan, asal toko, dan item dicatat sebagai snapshot agar riwayat tetap benar saat profil atau produk berubah.
+2. Ops admin menyetujui pesanan. Sistem memvalidasi cakupan, memilih hub/zona tujuan, lalu membuat shipment dan AWB unik 14 digit berawalan `11`. Antarmuka ops admin saat ini berfokus pada persetujuan, tanpa tombol tolak.
+3. Operator hub yang dipilih sistem menugaskan pickup. Kurir menerima dan memfoto paket lewat kamera, lalu hub mengonfirmasi kedatangan. Satu hub yang sama menangani pickup dan delivery shipment pada alur sekarang.
+4. Operator hub memilih paket untuk satu run, melihat rekomendasi urutan berdasarkan jalan, usia paket, dan retry, serta memilih kurir yang sesuai area dan kapasitas. Kurir dapat menerima semuanya atau menolak paket tertentu dengan alasan. Setelah itu hub mengonfirmasi serah terima fisik.
+5. Kurir mengikuti peta per stop. Keberhasilan membutuhkan nama penerima dan foto kamera; kegagalan membutuhkan alasan. Aplikasi menyimpan waktu, aktor, nomor percobaan, dan catatan.
+6. Paket gagal harus dikembalikan secara fisik dan dikonfirmasi operator hub sebelum keputusan jadwal ulang/retur. Run berikutnya menggunakan AWB yang sama. Penolakan sebelum berangkat bukan percobaan pengantaran.
+7. Pelanggan dapat mencari sampai 10 AWB, membuka kartu preview, lalu melihat halaman detail dengan jam WIB, kurir, alasan/catatan, foto sesuai izin, serta seluruh percobaan. Refresh atau tombol perbarui status memuat data terbaru pada AWB yang sama. Fashionaja hanya menampilkan pesanan dan AWB, tanpa tautan tracking.
+8. Operator hub dapat menyegarkan dan mengunduh laporan harian XLSX. Ops admin dapat memantau ringkasan operasional. Riwayat audit tidak ditimpa.
 
-Laravel membuat event dan outbox notifikasi setelah perubahan status. n8n mengorkestrasi pengiriman lewat adapter akun Telegram pribadi. Template pelanggan dibatasi pada AWB terbit, mulai diantar, gagal kirim, jadwal ulang, dan terkirim. Template kurir mencakup penugasan/pengingat; operator hub menerima kendala dan laporan. Nomor telepon pelanggan dapat dicoba sebagai tujuan LIVE **hanya** bila mode LIVE, email masuk allowlist, dan nomor/peer memenuhi syarat. Pairing API tersedia tetapi tidak wajib untuk alur nomor pelanggan. Telegram dapat menolak tujuan karena privasi atau akun tidak ada; statusnya harus `FAILED`, sedangkan mode pengembangan dicatat `SIMULATED`. Keberhasilan alur paket tidak bergantung pada keberhasilan pesan.
+## Integrasi dan batasannya
 
-## Ukuran keberhasilan dan batas MVP
+Laravel membuat event serta outbox notifikasi; n8n menangani pengiriman, pemulihan antrean, pengingat, dan laporan melalui adapter Telegram. Template pelanggan meliputi AWB terbit, mulai diantar, gagal kirim, jadwal ulang, dan terkirim; template internal meliputi penugasan dan kendala. Pengiriman LIVE dibatasi penerima yang diizinkan; nomor telepon bukan jaminan akun Telegram dapat dihubungi. Gagal mengirim pesan tidak membatalkan perubahan status paket.
 
-Satu demonstrasi berhasil bila checkout tetap ada setelah refresh; AWB muncul setelah persetujuan; hub mengatur pickup dan mengonfirmasi kedatangan; kurir menerima run, gagal pada attempt pertama, mengembalikan paket, lalu berhasil pada attempt kedua dengan foto; pelanggan melihat riwayat yang utuh; dan laporan harian menghitung paket serta attempt tanpa menggandakan AWB. Penolakan per paket dan pembatasan area kurir harus terlihat. Integrasi AWB resmi, pembayaran, transit antarahub, lalu lintas waktu nyata, serta jaminan pengiriman Telegram ke setiap nomor berada di luar implementasi ini.
+Integrasi AWB resmi Anteraja, pembayaran, transit antarahub, pelacakan GPS langsung, optimasi rute global yang dijamin, dan jaminan Telegram mencapai setiap nomor berada di luar cakupan implementasi saat ini.
+
+## Kriteria keberhasilan
+
+Alur akhir ke akhir berhasil bila checkout bertahan setelah refresh; ops admin menerbitkan AWB; hub mengatur pickup, menerima paket, dan membuat run; kurir dapat menolak paket tertentu, lalu menjalani percobaan gagal dan berhasil setelah retur/jadwal ulang; pelanggan melihat riwayat kedua percobaan dan bukti yang tepat; laporan hub menghitung AWB dan attempt tanpa menggandakan paket. Hak akses berbeda tetap berlaku pada setiap API.

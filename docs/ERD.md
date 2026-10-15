@@ -1,6 +1,6 @@
 # ERD logis — Fashionaja dan Anteraja
 
-ERD ini mengikuti [PRD](PRD.md), [FRD](FRD.md), dan [schema PostgreSQL](../backend/database/satria-schema.sql). Diagram dibagi dua agar relasinya terbaca; `USER`, `HUB`, `SERVICE_ZONE`, dan `SHIPMENT` yang muncul pada kedua diagram adalah **entitas yang sama**, bukan tabel duplikat. Diagram menonjolkan kunci dan relasi; daftar kolom serta constraint lengkap ada di schema. Fashionaja dan Anteraja memakai satu database melalui Laravel API. Banyak `HUB` tersedia sebagai master data DKI, tetapi satu shipment pada alur MVP memakai **hub penanganan yang sama** untuk koordinasi pickup dan delivery. `HUB_LINK`/rute antarahub ada pada schema sebagai ruang ekspansi, belum menjadi langkah bisnis aktif.
+ERD ini mengikuti [PRD](PRD.md), [FRD](FRD.md), dan [schema PostgreSQL](../backend/database/satria-schema.sql). Diagram dibagi dua agar relasinya terbaca; `USER`, `HUB`, `SERVICE_ZONE`, dan `SHIPMENT` yang muncul pada kedua diagram adalah **entitas yang sama**, bukan tabel duplikat. Diagram menonjolkan kunci dan relasi; daftar kolom serta constraint inti ada di schema dan migrasi Laravel. Fashionaja dan Anteraja memakai satu database melalui Laravel API. Banyak `HUB` tersedia sebagai master data DKI, tetapi satu shipment pada alur MVP memakai **hub penanganan yang sama** untuk koordinasi pickup dan delivery. `HUB_LINK`/rute antarahub ada pada schema sebagai ruang ekspansi, belum menjadi langkah bisnis aktif.
 
 ## 1. Toko baju, checkout, AWB, dan hub tujuan
 
@@ -208,6 +208,7 @@ erDiagram
     DELIVERY_ATTEMPT ||--o| SHIPMENT_ISSUE : memicu
     SHIPMENT ||--o{ TRACKING_EVENT : riwayat
     USER |o--o{ TRACKING_EVENT : pelaku
+    TRACKING_EVENT ||--o| TRACKING_EVENT_TIME_CORRECTION : koreksi_waktu_historis
     TRACKING_EVENT |o--o{ NOTIFICATION : memicu
     USER |o--o{ NOTIFICATION_TARGET : penerima_user
     HUB |o--o{ NOTIFICATION_TARGET : penerima_hub
@@ -295,6 +296,13 @@ erDiagram
         datetime occurred_at
         json details
     }
+    TRACKING_EVENT_TIME_CORRECTION {
+        bigint tracking_event_id PK, FK
+        datetime original_occurred_at
+        datetime corrected_occurred_at
+        string reason
+        datetime created_at
+    }
     NOTIFICATION_TARGET {
         bigint id PK
         bigint user_id FK "atau hub_id"
@@ -337,7 +345,7 @@ erDiagram
     }
 ```
 
-**Makna penting:** satu `PICKUP_TASK` dibuat per shipment setelah ACC; `PICKUP_ASSIGNMENT` menyimpan kurir pickup. Penugasan yang ditolak/gagal tetap tersimpan. Hanya kurir pemilik tugas dapat menyelesaikan pickup dengan **foto di toko**. Satu `DELIVERY_RUN` milik satu kurir, satu tanggal layanan, dan satu zona antar. UI tidak mewajibkan pembagian tiga sesi waktu. `RUN_SHIPMENT` menghubungkan banyak shipment ke run; shipment gagal dapat muncul lagi pada run berikutnya. `DELIVERY_ATTEMPT` dibuat saat kurir pemilik run melaporkan hasil; tugas yang ditolak bukan percobaan. Hasil `DELIVERED` mensyaratkan **foto serah terima**. Rujukan foto menunjuk file pada storage privat, bukan foto BLOB/URL publik. Gagal antar membuka `SHIPMENT_ISSUE` untuk keputusan **operator hub** setelah paket kembali dikonfirmasi di hub. Baris attempt dan event append-only. `TELEGRAM_PAIRING_REQUEST` dan `TELEGRAM_LINK` mendukung pairing opsional. Untuk notifikasi LIVE, Laravel dapat memakai link aktif **atau nomor pada akun user** yang valid, jika email ada dalam allowlist. Provider masih dapat menolak nomor tersebut; hasilnya dicatat `FAILED`. Nomor snapshot penerima pada order tidak otomatis menjadi peer terverifikasi. `NOTIFICATION` mencatat penerima logis, tujuan aktual, mode MOCK/LIVE, deduplikasi, serta hasil pengiriman. `DAILY_REPORT` menyimpan ringkasan per hub/hari.
+**Makna penting:** `TRACKING_EVENT_TIME_CORRECTION` adalah overlay satu-ke-nol/ satu untuk memperbaiki pembacaan waktu event historis yang pernah tersimpan tujuh jam terlalu maju. Event asli tetap append-only; tracking dan laporan memakai waktu efektif `corrected_occurred_at` jika ada. Tabel ini ditambahkan lewat [migrasi Laravel](../backend/database/migrations/2026_10_15_180231_create_tracking_event_time_corrections_table.php). Satu `PICKUP_TASK` dibuat per shipment setelah ACC; `PICKUP_ASSIGNMENT` menyimpan kurir pickup. Penugasan yang ditolak/gagal tetap tersimpan. Hanya kurir pemilik tugas dapat menyelesaikan pickup dengan **foto di toko**. Satu `DELIVERY_RUN` milik satu kurir, satu tanggal layanan, dan satu zona antar. UI tidak mewajibkan pembagian tiga sesi waktu. `RUN_SHIPMENT` menghubungkan banyak shipment ke run; shipment gagal dapat muncul lagi pada run berikutnya. `DELIVERY_ATTEMPT` dibuat saat kurir pemilik run melaporkan hasil; tugas yang ditolak bukan percobaan. Hasil `DELIVERED` mensyaratkan **foto serah terima**. Rujukan foto menunjuk file pada storage privat, bukan foto BLOB/URL publik. Gagal antar membuka `SHIPMENT_ISSUE` untuk keputusan **operator hub** setelah paket kembali dikonfirmasi di hub. Baris attempt dan event append-only. `TELEGRAM_PAIRING_REQUEST` dan `TELEGRAM_LINK` mendukung pairing opsional. Untuk notifikasi LIVE, Laravel dapat memakai link aktif **atau nomor pada akun user** yang valid, jika email ada dalam allowlist. Provider masih dapat menolak nomor tersebut; hasilnya dicatat `FAILED`. Nomor snapshot penerima pada order tidak otomatis menjadi peer terverifikasi. `NOTIFICATION` mencatat penerima logis, tujuan aktual, mode MOCK/LIVE, deduplikasi, serta hasil pengiriman. `DAILY_REPORT` menyimpan ringkasan per hub/hari.
 
 ## 3. Kardinalitas dan aturan data
 
@@ -359,6 +367,7 @@ erDiagram
 | Pengembalian ke seller | Keputusan operator hub menghasilkan `RETURN_REQUESTED`; `RETURNED_TO_SELLER` baru setelah serah terima fisik. |
 | Pickup dan custody | Sebelum pickup, `custody_type = SELLER`; foto/scan pickup memindahkannya ke `COURIER`; scan masuk **hub pengantaran terpilih** memindahkannya ke `HUB`. Hub lain tidak boleh menerima sebelum pickup sukses. |
 | Konfirmasi pembeli | Dicatat sebagai `TRACKING_EVENT` baru pada shipment yang sudah `DELIVERED`; data percobaan kurir tidak diubah. |
+| Koreksi waktu audit | `TRACKING_EVENT` → `TRACKING_EVENT_TIME_CORRECTION` adalah 1:0..1. Baris audit asli tidak diubah; waktu efektif dipakai pada tracking pelanggan/operator, prioritas paket, dan laporan. |
 | Telegram demo | Adapter MTProto menyimpan sesi pengirim secara privat. Pairing `TELEGRAM_PAIRING_REQUEST` → `TELEGRAM_LINK` tersedia secara opsional; LIVE juga dapat mencoba nomor akun user yang masuk allowlist. Nomor snapshot order tidak dianggap peer terverifikasi. Akun user dapat mencabut link (`revoked_at`). |
 | Notifikasi n8n | `dedupe_key` unik per event, penerima, dan template. MOCK berakhir `SIMULATED`; LIVE baru boleh `SENT` setelah adapter mengonfirmasi. Tugas kurir diputuskan di Laravel. |
 

@@ -1,6 +1,6 @@
 # PostgreSQL schema Satria
 
-[schema.sql](schema.sql) adalah rancangan database baru yang mengikuti [ERD](../docs/ERD.md) dan alur katalog React/web utama React → Laravel → PostgreSQL, dengan n8n untuk orkestrasi pesan. [seed.sql](seed.sql) adalah fixture dummy kecil untuk schema ini. File tidak menghapus tabel. Jalankan pada database kosong; saat aplikasi Laravel dibangun, pindahkan struktur ini ke migration Laravel dan seed ke DatabaseSeeder. Laravel menjadi satu-satunya komponen yang menulis data operasional.
+[schema.sql](schema.sql) adalah rancangan database baru yang mengikuti [ERD](../../docs/ERD.md) dan alur katalog React/web utama React → Laravel → PostgreSQL, dengan n8n untuk orkestrasi pesan. [seed.sql](seed.sql) adalah fixture dummy kecil untuk schema ini. File referensi ini untuk database terpisah yang kosong; migrasi dan seeder pada `backend/` adalah sumber yang digunakan aplikasi saat ini. Jangan menjalankan schema referensi ini pada database Laravel yang sudah aktif. Laravel menjadi satu-satunya komponen yang menulis data operasional.
 
 ```bash
 createdb satria_demo
@@ -9,7 +9,7 @@ psql -v ON_ERROR_STOP=1 -d satria_demo -f database/seed.sql
 psql -v ON_ERROR_STOP=1 -d satria_demo -f database/verify_seed.sql
 ```
 
-Seed dapat dijalankan ulang tanpa menambah baris duplikat untuk data contoh. Ia memakai identity default PostgreSQL, sehingga `fix_sequences.sql` dari dataset teman **tidak diperlukan**. Jangan menjalankan schema/seed teman dari folder Downloads pada database ini karena struktur tabelnya berbeda. Password dummy dan daftar akun ada pada [runbook](../docs/DEMO_RUNBOOK.md). Jangan jalankan seed ini pada database berisi akun nyata.
+Seed dapat dijalankan ulang tanpa menambah baris duplikat untuk data contoh. Ia memakai identity default PostgreSQL, sehingga `fix_sequences.sql` dari dataset teman **tidak diperlukan**. Jangan menjalankan schema/seed teman dari folder Downloads pada database ini karena struktur tabelnya berbeda. Akun contoh dan kata sandi pengembangan dijelaskan pada [README portal](../../apps/ops/README.md). Jangan jalankan seed ini pada database berisi akun nyata.
 
 ## Peta tabel
 

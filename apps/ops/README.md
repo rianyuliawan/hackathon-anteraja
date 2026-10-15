@@ -4,7 +4,7 @@ Frontend React + TypeScript + Tailwind CSS + React Router untuk ops admin, opera
 
 ## Menjalankan
 
-Siapkan PostgreSQL, jalankan migrasi/seed dan server Laravel. Lihat [rancangan deployment](../../docs/TECH_STACK_DAN_DEPLOYMENT.md) dan [runbook demo](../../docs/DEMO_RUNBOOK.md) untuk urutan layanan dan alur data. Dari folder `apps/ops`:
+Siapkan PostgreSQL, jalankan migrasi/seed dan server Laravel. Lihat [alur dan arsitektur](../../docs/ALUR_DAN_ARSITEKTUR.md) serta [FRD](../../docs/FRD.md) untuk urutan layanan dan alur data. Dari folder `apps/ops`:
 
 ```bash
 cp .env.example .env
