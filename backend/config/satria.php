@@ -3,6 +3,10 @@
 return [
     'telegram_mode' => env('TELEGRAM_MODE', 'MOCK'),
     'telegram_live_recipient_emails' => array_filter(array_map('trim', explode(',', strtolower((string) env('TELEGRAM_LIVE_RECIPIENT_EMAILS', ''))))),
+    'demo_account_password' => env('DEMO_ACCOUNT_PASSWORD', 'anteraja123'),
+    'demo_ops_phone' => env('DEMO_OPS_PHONE'),
+    'demo_hub_phone' => env('DEMO_HUB_PHONE'),
+    'demo_courier_phone' => env('DEMO_COURIER_PHONE'),
     'internal_token' => env('SATRIA_INTERNAL_TOKEN', ''),
     'n8n_webhook_url' => env('N8N_WEBHOOK_URL', ''),
     'n8n_webhook_token' => env('N8N_WEBHOOK_TOKEN', ''),

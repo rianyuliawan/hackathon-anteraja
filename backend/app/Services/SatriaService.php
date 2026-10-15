@@ -105,6 +105,16 @@ class SatriaService
             config('satria.telegram_live_recipient_emails', []), true);
     }
 
+    public function telegramTemplateAllowed(string $recipient, string $template): bool
+    {
+        return match ($recipient) {
+            'BUYER' => in_array($template, ['AWB_GENERATED', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'REDELIVERY_SCHEDULED', 'DELIVERED'], true),
+            'COURIER' => in_array($template, ['DELIVERY_ASSIGNED', 'ASSIGNMENT_REMINDER'], true),
+            'HUB_OPERATOR' => in_array($template, ['DELIVERY_RUN_REJECTED', 'DELIVERY_ASSIGNMENT_REJECTED', 'DELIVERY_FAILED', 'REDELIVERY_DECISION_REQUIRED', 'TASK_UNRESPONDED', 'DAILY_REPORT'], true),
+            default => false,
+        };
+    }
+
     public function notifyUser(
         int $eventId,
         int $shipmentId,
@@ -113,6 +123,9 @@ class SatriaService
         string $template,
         string $message
     ): void {
+        if (! $this->telegramTemplateAllowed($logicalRecipient, $template)) {
+            return;
+        }
         if (! DB::table('users')->where('id', $userId)->where('active', true)->exists()) {
             return;
         }
@@ -133,9 +146,23 @@ class SatriaService
         $dedupeKey = hash('sha256', implode(':', [$eventId, $userId, $template]));
         $awb = DB::table('shipments')->where('id', $shipmentId)->value('awb');
         $baseUrl = rtrim((string) config('satria.ops_public_url'), '/');
+        $eventDetails = json_decode((string) DB::table('tracking_events')->where('id', $eventId)->value('details'), true);
+        $deliveryRunId = match ($template) {
+            'DELIVERY_ASSIGNED' => (int) ($eventDetails['run_id'] ?? 0),
+            'ASSIGNMENT_REMINDER' => ($eventDetails['type'] ?? null) === 'delivery_run'
+                ? (int) ($eventDetails['task_id'] ?? 0) : 0,
+            default => 0,
+        };
+        $courierActionUrl = $deliveryRunId > 0
+            ? $baseUrl.'/courier-deliveries?run='.$deliveryRunId
+            : (($eventDetails['type'] ?? null) === 'pickup_assignment'
+                ? $baseUrl.'/courier-pickups' : $baseUrl.'/courier-deliveries');
         $actionUrl = match ($template) {
-            'DELIVERY_ASSIGNED' => $baseUrl.'/courier-deliveries',
-            'OUT_FOR_DELIVERY', 'REDELIVERY_SCHEDULED' => $baseUrl.'/tracking/'.rawurlencode($awb).'?from='.rawurlencode($awb),
+            'DELIVERY_ASSIGNED', 'ASSIGNMENT_REMINDER' => $courierActionUrl,
+            'DELIVERY_RUN_REJECTED', 'DELIVERY_ASSIGNMENT_REJECTED', 'TASK_UNRESPONDED' => $baseUrl.'/hub-dispatch',
+            'DELIVERY_FAILED', 'REDELIVERY_DECISION_REQUIRED' => $logicalRecipient === 'HUB_OPERATOR'
+                ? $baseUrl.'/hub-issues' : $baseUrl.'/tracking/'.rawurlencode($awb).'?from='.rawurlencode($awb),
+            'OUT_FOR_DELIVERY', 'REDELIVERY_SCHEDULED', 'DELIVERED' => $baseUrl.'/tracking/'.rawurlencode($awb).'?from='.rawurlencode($awb),
             default => $logicalRecipient === 'BUYER'
                 ? $baseUrl.'/tracking/'.rawurlencode($awb).'?from='.rawurlencode($awb)
                 : $baseUrl.'/',
@@ -143,8 +170,14 @@ class SatriaService
         $order = DB::table('shipments as shipment')->join('orders as order', 'order.id', '=', 'shipment.order_id')
             ->where('shipment.id', $shipmentId)->first(['order.recipient_name', 'order.destination_address_snapshot']);
         $message = match ($template) {
+            'AWB_GENERATED' => "Halo, Kak {$order->recipient_name}! 👋🏻\n\nPesanan Anda sudah diproses dan nomor resinya telah terbit.\n\n📦 Nomor resi: {$awb}\n\nAnda dapat melihat perjalanan paket melalui tautan berikut:\n🔗 {$actionUrl}\n\nTerima kasih telah menggunakan Anteraja! 🙏🏻",
             'DELIVERY_ASSIGNED' => "📦 Penugasan Pengiriman Baru\n\nHalo, Satria!\n\nAda paket baru yang perlu kamu kirimkan. Silakan cek detail penugasan dan lakukan konfirmasi persetujuan pengiriman melalui tautan berikut:\n\n🔗 Lihat Detail Penugasan: {$actionUrl}\n\nTerima kasih atas kerja samanya. 🙌",
             'OUT_FOR_DELIVERY' => "Halo, Kak {$order->recipient_name} 👋🏻\n\nKami dari Anteraja akan melakukan proses delivery paket dengan nomor waybill {$awb} ke alamat Anda di {$order->destination_address_snapshot}.\nMohon ditunggu ya,\n\nTerima kasih! 🙏🏻😊",
+            'DELIVERY_FAILED' => $logicalRecipient === 'BUYER'
+                ? "Halo, Kak {$order->recipient_name}! 👋🏻\n\n{$message}\n\nKami akan memberi tahu langkah berikutnya. Lihat riwayat dan kendalanya: {$actionUrl}"
+                : $message."\nTangani di: {$actionUrl}",
+            'DELIVERED' => "Halo, Kak {$order->recipient_name}! Paket dengan resi {$awb} telah diantar. Silakan periksa paket dan lihat rincian pengiriman di {$actionUrl}. Terima kasih! 🙏🏻",
+            'ASSIGNMENT_REMINDER' => "Halo, Satria! Tugas pengantaran untuk resi {$awb} masih menunggu jawaban Anda. Mohon terima atau tolak tugas melalui {$actionUrl}.",
             'REDELIVERY_SCHEDULED' => $this->rescheduleMessage($shipmentId, $awb, (string) $order->recipient_name, $actionUrl),
             default => $message."\nLihat: {$actionUrl}",
         };
@@ -165,11 +198,75 @@ class SatriaService
             'updated_at' => now(),
         ]);
 
-        if ($inserted === 0 || $webhookUrl === '') {
+        if ($inserted !== 0) {
+            $notificationId = (int) DB::table('notifications')->where('dedupe_key', $dedupeKey)->value('id');
+            $this->dispatchNotification($notificationId);
+        }
+    }
+
+    public function notifyDailyReport(object $report): void
+    {
+        $hub = DB::table('hubs')->where('id', $report->hub_id)->first(['name']);
+        if ($hub === null) {
             return;
         }
+        $date = Carbon::parse($report->report_date)->format('d-m-Y');
+        $actionUrl = rtrim((string) config('satria.ops_public_url'), '/').'/hub-reports';
+        $message = "📊 Laporan Harian {$hub->name} — {$date}\n\n"
+            ."Paket baru: {$report->shipments_created}\n"
+            ."Paket terkirim: {$report->delivered}\n"
+            ."Percobaan gagal: {$report->failed_attempts}\n"
+            ."Berhasil setelah antar ulang: {$report->redelivered}\n"
+            ."Permintaan retur: {$report->returned_requested}\n\n"
+            ."Lihat rincian dan unduh XLSX: {$actionUrl}";
+        $userIds = DB::table('user_roles')->where('role', 'HUB_OPERATOR')
+            ->where('hub_id', $report->hub_id)->distinct()->pluck('user_id');
 
-        $notificationId = (int) DB::table('notifications')->where('dedupe_key', $dedupeKey)->value('id');
+        foreach ($userIds as $userId) {
+            $userId = (int) $userId;
+            $user = DB::table('users')->where('id', $userId)->where('active', true)->first(['phone']);
+            if ($user === null) {
+                continue;
+            }
+            DB::table('notification_targets')->insertOrIgnore([
+                'user_id' => $userId, 'channel' => 'TELEGRAM', 'active' => true,
+            ]);
+            $targetId = DB::table('notification_targets')->where('user_id', $userId)
+                ->where('channel', 'TELEGRAM')->value('id');
+            $linked = DB::table('telegram_links')->where('user_id', $userId)
+                ->whereNull('revoked_at')->exists();
+            $hasDestination = $linked || preg_match('/^(?:\+62|62|0)8[0-9]{8,11}$/', (string) $user->phone) === 1;
+            $mode = config('satria.telegram_mode') === 'LIVE' && $hasDestination && $this->telegramLiveAllowed($userId)
+                ? 'LIVE' : 'MOCK';
+            $dedupeKey = hash('sha256', implode(':', ['DAILY_REPORT', $report->report_date, $report->hub_id, $userId]));
+            $inserted = DB::table('notifications')->insertOrIgnore([
+                'tracking_event_id' => null,
+                'shipment_id' => null,
+                'target_id' => $targetId,
+                'logical_recipient' => 'HUB_OPERATOR',
+                'template_key' => 'DAILY_REPORT',
+                'message_text' => $message,
+                'action_url' => $actionUrl,
+                'channel' => 'TELEGRAM',
+                'delivery_mode' => $mode,
+                'status' => $mode === 'MOCK' && config('satria.n8n_webhook_url') === '' ? 'SIMULATED' : 'QUEUED',
+                'dedupe_key' => $dedupeKey,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            if ($inserted !== 0) {
+                $notificationId = (int) DB::table('notifications')->where('dedupe_key', $dedupeKey)->value('id');
+                $this->dispatchNotification($notificationId);
+            }
+        }
+    }
+
+    private function dispatchNotification(int $notificationId): void
+    {
+        $webhookUrl = (string) config('satria.n8n_webhook_url', '');
+        if ($webhookUrl === '') {
+            return;
+        }
         DB::afterCommit(function () use ($webhookUrl, $notificationId): void {
             try {
                 Http::timeout(2)->withHeaders([
@@ -266,9 +363,13 @@ class SatriaService
         $shipments = $rows->map(function (object $row) use ($attempts): array {
             $shipment = DB::table('shipments')->where('id', $row->shipment_id)->first();
             $attempt = $attempts->get($row->id);
+            $shipmentData = $this->shipmentPayload($shipment);
+            $shipmentData['last_attempt'] = DB::table('delivery_attempts')
+                ->where('shipment_id', $row->shipment_id)->orderByDesc('attempt_no')
+                ->first(['attempt_no', 'result', 'failure_reason', 'notes', 'attempted_at']);
 
             return array_merge((array) $row, [
-                'shipment' => $this->shipmentPayload($shipment),
+                'shipment' => $shipmentData,
                 'delivery_attempt' => $attempt ? [
                     'attempt_no' => $attempt->attempt_no,
                     'result' => $attempt->result,

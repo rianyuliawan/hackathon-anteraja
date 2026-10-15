@@ -119,6 +119,76 @@ class CourierOperationsController extends Controller
         return response()->json(['data' => $rows]);
     }
 
+    public function searchShipments(Request $request): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'COURIER');
+        $input = $request->validate(['query' => ['required', 'string', 'regex:/^[0-9]{2,14}$/']]);
+        $rows = DB::table('shipments as s')
+            ->join('run_shipments as rs', 'rs.shipment_id', '=', 's.id')
+            ->join('delivery_runs as r', 'r.id', '=', 'rs.run_id')
+            ->join('orders as o', 'o.id', '=', 's.order_id')
+            ->where('r.courier_user_id', $request->user()->id)
+            ->where('s.awb', 'like', '%'.$input['query'].'%')
+            ->select('s.id', 's.awb', 's.status', 'o.recipient_name',
+                'o.destination_address_snapshot', 's.updated_at')
+            ->distinct()->orderByDesc('s.updated_at')->limit(20)->get();
+
+        return response()->json(['data' => $rows]);
+    }
+
+    public function courierShipment(Request $request, string $awb): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'COURIER');
+        abort_unless(preg_match('/^[0-9]{14}$/', $awb), 404);
+        $shipment = DB::table('shipments')->where('awb', $awb)->first();
+        abort_if($shipment === null, 404, 'Resi tidak ditemukan.');
+        $assigned = DB::table('run_shipments as rs')
+            ->join('delivery_runs as r', 'r.id', '=', 'rs.run_id')
+            ->where('rs.shipment_id', $shipment->id)
+            ->where('r.courier_user_id', $request->user()->id)->exists();
+        abort_unless($assigned, 403, 'Paket tidak ditugaskan kepada akun ini.');
+
+        $assignments = DB::table('run_shipments as rs')
+            ->join('delivery_runs as r', 'r.id', '=', 'rs.run_id')
+            ->where('rs.shipment_id', $shipment->id)
+            ->where('r.courier_user_id', $request->user()->id)
+            ->orderByDesc('r.assigned_at')
+            ->get(['rs.id', 'rs.run_id', 'rs.stop_order', 'rs.status', 'rs.rejection_reason',
+                'rs.handed_over_at', 'rs.returned_at', 'r.service_date', 'r.status as run_status',
+                'r.hub_id', 'r.assigned_at']);
+        $attempts = DB::table('delivery_attempts as a')
+            ->join('run_shipments as rs', 'rs.id', '=', 'a.run_shipment_id')
+            ->join('delivery_runs as r', 'r.id', '=', 'rs.run_id')
+            ->where('a.shipment_id', $shipment->id)
+            ->orderByDesc('a.attempt_no')
+            ->get(['a.attempt_no', 'a.result', 'a.failure_reason', 'a.notes', 'a.recipient_name',
+                'a.attempted_at', 'r.courier_user_id', 'a.delivery_photo_ref'])
+            ->map(fn ($attempt): array => [
+                'attempt_no' => $attempt->attempt_no,
+                'result' => $attempt->result,
+                'failure_reason' => $attempt->failure_reason,
+                'notes' => $attempt->notes,
+                'recipient_name' => $attempt->recipient_name,
+                'attempted_at' => $attempt->attempted_at,
+                'photo_available' => $attempt->delivery_photo_ref !== null
+                    && (int) $attempt->courier_user_id === (int) $request->user()->id,
+            ]);
+        $pickupPhoto = DB::table('pickup_assignments as a')
+            ->join('pickup_tasks as t', 't.id', '=', 'a.pickup_task_id')
+            ->where('t.shipment_id', $shipment->id)
+            ->where('a.status', 'COMPLETED')->whereNotNull('a.pickup_photo_ref')
+            ->orderByDesc('a.picked_up_at')->first(['a.picked_up_at']);
+
+        return response()->json(['data' => [
+            'shipment' => $this->satria->shipmentPayload($shipment),
+            'hub_name' => DB::table('hubs')->where('id', $shipment->delivery_hub_id)->value('name'),
+            'assignments' => $assignments,
+            'attempts' => $attempts,
+            'pickup_photo_available' => $pickupPhoto !== null,
+            'pickup_photo_taken_at' => $pickupPhoto?->picked_up_at,
+        ]]);
+    }
+
     public function acceptRun(Request $request, int $id): JsonResponse
     {
         $this->satria->requireRole($request->user(), 'COURIER');

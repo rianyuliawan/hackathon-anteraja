@@ -24,6 +24,18 @@ class IntegrationController extends Controller
             ->where('attempts', '>=', 3)
             ->update(['status' => 'FAILED', 'last_error' => 'Dispatch timed out after retry limit.', 'updated_at' => now()]);
         $rows = DB::table('notifications')->whereIn('status', ['QUEUED', 'FAILED'])
+            ->where(function ($query): void {
+                $query->where(function ($buyer): void {
+                    $buyer->where('logical_recipient', 'BUYER')
+                        ->whereIn('template_key', ['AWB_GENERATED', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'REDELIVERY_SCHEDULED', 'DELIVERED']);
+                })->orWhere(function ($courier): void {
+                    $courier->where('logical_recipient', 'COURIER')
+                        ->whereIn('template_key', ['DELIVERY_ASSIGNED', 'ASSIGNMENT_REMINDER']);
+                })->orWhere(function ($hub): void {
+                    $hub->where('logical_recipient', 'HUB_OPERATOR')
+                        ->whereIn('template_key', ['DELIVERY_RUN_REJECTED', 'DELIVERY_ASSIGNMENT_REJECTED', 'DELIVERY_FAILED', 'REDELIVERY_DECISION_REQUIRED', 'TASK_UNRESPONDED', 'DAILY_REPORT']);
+                });
+            })
             ->where('attempts', '<', 3)
             ->orderBy('created_at')->limit(100)->get(['id']);
 
@@ -71,6 +83,14 @@ class IntegrationController extends Controller
         $claim = DB::transaction(function () use ($id): array {
             $notification = DB::table('notifications')->where('id', $id)->lockForUpdate()->first();
             abort_if($notification === null, 404);
+            if (! $this->satria->telegramTemplateAllowed($notification->logical_recipient, $notification->template_key)) {
+                DB::table('notifications')->where('id', $id)->update([
+                    'status' => 'FAILED', 'attempts' => 3,
+                    'last_error' => 'Template not enabled for Telegram dispatch.', 'updated_at' => now(),
+                ]);
+
+                return ['claimed' => false];
+            }
             if (! in_array($notification->status, ['QUEUED', 'FAILED'], true) || $notification->attempts >= 3) {
                 return ['claimed' => false];
             }
@@ -200,14 +220,16 @@ class IntegrationController extends Controller
             $run = DB::table('delivery_runs')->where('id', $id)->first();
             abort_if($run === null, 404);
             abort_unless($run->status === 'PENDING_ACCEPT', 409);
-            $shipmentIds = DB::table('run_shipments')->where('run_id', $id)->pluck('shipment_id')->all();
+            $shipmentIds = DB::table('run_shipments')->where('run_id', $id)->orderBy('stop_order')
+                ->limit(1)->pluck('shipment_id')->all();
             $courierId = $run->courier_user_id;
         }
         $sent = 0;
         foreach ($shipmentIds as $shipmentId) {
             $recent = DB::table('tracking_events')->where('shipment_id', $shipmentId)
                 ->where('event_type', 'ASSIGNMENT_REMINDER')
-                ->where('occurred_at', '>=', now()->subMinutes(30))->exists();
+                ->whereRaw("details::jsonb ->> 'task_id' = ?", [(string) $id])
+                ->whereRaw("details::jsonb ->> 'type' = ?", [$input['type']])->exists();
             if ($recent) {
                 continue;
             }
@@ -216,6 +238,11 @@ class IntegrationController extends Controller
                 $shipment->status, ['type' => $input['type'], 'task_id' => $id]);
             $this->satria->notifyUser($eventId, $shipmentId, $courierId, 'COURIER',
                 'ASSIGNMENT_REMINDER', "Pengingat tugas {$input['type']} untuk resi {$shipment->awb}. Silakan jawab di aplikasi.");
+            if ($input['type'] === 'delivery_run') {
+                $this->satria->notifyRoleAtHub($eventId, $shipmentId, 'HUB_OPERATOR',
+                    $run->hub_id, 'TASK_UNRESPONDED',
+                    "Kurir belum menjawab tugas antar #{$id} untuk resi {$shipment->awb}. Tinjau penugasan.");
+            }
             $sent++;
         }
 
@@ -227,6 +254,11 @@ class IntegrationController extends Controller
         $date = $request->validate(['report_date' => ['nullable', 'date_format:Y-m-d']])['report_date']
             ?? today()->toDateString();
 
-        return response()->json(['data' => $this->satria->generateDailyReports($date)]);
+        $reports = $this->satria->generateDailyReports($date);
+        foreach ($reports as $report) {
+            $this->satria->notifyDailyReport($report);
+        }
+
+        return response()->json(['data' => $reports]);
     }
 }

@@ -25,6 +25,39 @@ class SatriaFlowTest extends TestCase
         Storage::fake('local');
     }
 
+    public function test_cakung_hackathon_accounts_and_reports_are_seeded_idempotently(): void
+    {
+        $hubId = DB::table('hubs')->where('code', 'HUB-JT')->value('id');
+        $accounts = [
+            'rianyuliawan@anteraja.id' => 'OPS_ADMIN',
+            'rianyuliawan1@anteraja.id' => 'HUB_OPERATOR',
+            'afrien@anteraja.id' => 'COURIER',
+        ];
+        foreach ($accounts as $email => $role) {
+            $user = User::where('email', $email)->firstOrFail();
+            $this->assertTrue(Hash::check('anteraja123', $user->password));
+            $this->assertTrue(DB::table('user_roles')->where('user_id', $user->id)
+                ->where('role', $role)->exists());
+        }
+        $afrien = User::where('email', 'afrien@anteraja.id')->firstOrFail();
+        $this->assertSame($hubId, DB::table('courier_profiles')->where('user_id', $afrien->id)
+            ->value('home_hub_id'));
+        $this->assertTrue(DB::table('delivery_runs as run')
+            ->join('run_shipments as item', 'item.run_id', '=', 'run.id')
+            ->join('shipments as shipment', 'shipment.id', '=', 'item.shipment_id')
+            ->where('shipment.awb', '11902600000306')
+            ->where('run.courier_user_id', $afrien->id)
+            ->where('run.status', 'PENDING_ACCEPT')->exists());
+        $this->assertSame(4, DB::table('daily_reports')->where('hub_id', $hubId)->count());
+
+        $users = DB::table('users')->count();
+        $runs = DB::table('delivery_runs')->count();
+        $this->artisan('db:seed', ['--class' => 'CakungHackathonSeeder', '--force' => true]);
+        $this->assertSame($users, DB::table('users')->count());
+        $this->assertSame($runs, DB::table('delivery_runs')->count());
+        $this->assertSame(4, DB::table('daily_reports')->where('hub_id', $hubId)->count());
+    }
+
     public function test_workspace_scopes_receive_separate_session_cookies(): void
     {
         $first = $this->withHeader('X-Workspace-Session', 'f8848ea1-77ac-4bde-853c-75ca4d0e21a1')
@@ -37,6 +70,39 @@ class SatriaFlowTest extends TestCase
         $this->assertNotNull($secondCookie);
         $this->assertNotSame($firstCookie->getName(), $secondCookie->getName());
         $this->assertNotSame($first->json('csrf_token'), $second->json('csrf_token'));
+    }
+
+    public function test_courier_can_search_and_open_only_assigned_parcels(): void
+    {
+        $courier = User::where('email', 'galih.pratama@anteraja.id')->firstOrFail();
+        $buyer = User::where('email', 'siti.nurhaliza@anteraja.id')->firstOrFail();
+        $assigned = DB::table('run_shipments as rs')
+            ->join('delivery_runs as r', 'r.id', '=', 'rs.run_id')
+            ->join('shipments as s', 's.id', '=', 'rs.shipment_id')
+            ->where('r.courier_user_id', $courier->id)
+            ->orderByDesc('r.assigned_at')->first(['s.id', 's.awb']);
+        $this->assertNotNull($assigned);
+        $query = substr($assigned->awb, -8);
+
+        $this->actingAs($courier)->getJson('/api/v1/courier/shipments?query='.$query)
+            ->assertOk()->assertJsonFragment(['awb' => $assigned->awb]);
+        $this->actingAs($courier)->getJson('/api/v1/courier/shipments/'.$assigned->awb)
+            ->assertOk()->assertJsonPath('data.shipment.awb', $assigned->awb)
+            ->assertJsonStructure(['data' => ['assignments', 'attempts', 'pickup_photo_available']]);
+
+        $unassigned = DB::table('shipments as s')->whereNotExists(function ($query) use ($courier): void {
+            $query->selectRaw('1')->from('run_shipments as rs')
+                ->join('delivery_runs as r', 'r.id', '=', 'rs.run_id')
+                ->whereColumn('rs.shipment_id', 's.id')
+                ->where('r.courier_user_id', $courier->id);
+        })->value('s.awb');
+        $this->assertNotNull($unassigned);
+        $this->actingAs($courier)->getJson('/api/v1/courier/shipments/'.$unassigned)
+            ->assertForbidden();
+        $this->actingAs($buyer)->getJson('/api/v1/courier/shipments?query='.$query)
+            ->assertForbidden();
+        $this->actingAs($buyer)->getJson('/api/v1/courier/shipments/'.$assigned->awb)
+            ->assertForbidden();
     }
 
     public function test_road_route_uses_local_osrm_geometry_and_restricts_roles(): void
@@ -204,8 +270,8 @@ class SatriaFlowTest extends TestCase
         $admin = User::where('email', 'dimas.pratama@anteraja.id')->firstOrFail();
         $this->assertTrue(Hash::check('anteraja123', $admin->password));
         $this->assertSame(10, DB::table('hubs')->count());
-        $this->assertSame(5, DB::table('courier_zones')->where('service_type', 'PICKUP')->distinct()->count('courier_user_id'));
-        $this->assertSame(30, DB::table('courier_zones')->where('service_type', 'DELIVERY')->distinct()->count('courier_user_id'));
+        $this->assertSame(11, DB::table('courier_zones')->where('service_type', 'PICKUP')->distinct()->count('courier_user_id'));
+        $this->assertSame(34, DB::table('courier_zones')->where('service_type', 'DELIVERY')->distinct()->count('courier_user_id'));
         foreach ([
             'rangga.firmansyah@anteraja.id' => 'DUREN_SAWIT',
             'febriansyah.putra@anteraja.id' => 'PONDOK_KELAPA',
@@ -331,7 +397,7 @@ class SatriaFlowTest extends TestCase
             ->assertOk()->assertJsonFragment(['awb' => $awb]);
         $this->actingAs($buyer)->getJson("/api/v1/me/orders/{$orderId}")
             ->assertOk()->assertJsonPath('data.awb', $awb)
-            ->assertJsonPath('data.tracking_url', 'http://localhost:5174/tracking?awb='.$awb);
+            ->assertJsonPath('data.tracking_url', rtrim(config('satria.ops_public_url'), '/').'/tracking?awb='.$awb);
 
         $hubOperator = User::findOrFail($destinationOperatorId);
         $otherHubOperator = User::where('email', 'rani.putri@anteraja.id')->firstOrFail();
@@ -549,6 +615,23 @@ class SatriaFlowTest extends TestCase
         ], ['Accept' => 'application/json'])->assertOk()->assertJsonPath('data.attempt_no', 2);
 
         $this->assertSame(2, DB::table('delivery_attempts')->where('shipment_id', $shipment->id)->count());
+        $this->actingAs($buyer)->getJson("/api/v1/tracking/{$shipment->awb}")
+            ->assertOk()->assertJsonCount(2, 'data.attempts')
+            ->assertJsonPath('data.attempts.0.attempt_no', 1)
+            ->assertJsonPath('data.attempts.0.failure_reason', 'PENERIMA_TIDAK_ADA')
+            ->assertJsonPath('data.attempts.1.attempt_no', 2)
+            ->assertJsonPath('data.attempts.1.result', 'DELIVERED');
+        $historyUrl = "/api/v1/hubs/{$hubId}/shipments/{$shipment->awb}/history";
+        $this->actingAs($hubOperator)->getJson($historyUrl)
+            ->assertOk()->assertJsonCount(2, 'data.attempts')
+            ->assertJsonPath('data.shipment.awb', $shipment->awb)
+            ->assertJsonPath('data.attempts.0.failure_reason', 'PENERIMA_TIDAK_ADA')
+            ->assertJsonPath('data.attempts.1.result', 'DELIVERED')
+            ->assertJsonCount(1, 'data.issues');
+        $this->actingAs($otherHubOperator)->getJson($historyUrl)->assertForbidden();
+        $this->actingAs($buyer)->getJson($historyUrl)->assertForbidden();
+        $this->actingAs($otherZoneCourier)->getJson("/api/v1/tracking/{$shipment->awb}")
+            ->assertOk()->assertJsonCount(0, 'data.attempts');
         $this->assertSame($shipment->awb, DB::table('shipments')->where('id', $shipment->id)->value('awb'));
         $this->actingAs($buyer)->getJson("/api/v1/me/orders/{$shipment->order_id}/delivery-photo")
             ->assertOk();
@@ -656,6 +739,55 @@ class SatriaFlowTest extends TestCase
         ]))->assertCreated();
     }
 
+    public function test_courier_is_available_again_after_failed_parcel_is_returned_to_hub(): void
+    {
+        $operator = User::where('email', 'fajar.hidayat@anteraja.id')->firstOrFail();
+        $courier = User::where('email', 'hanif.saputra@anteraja.id')->firstOrFail();
+        $shipments = DB::table('shipments')->whereIn('awb', [
+            '11008260000401', '11008260000402',
+        ])->orderBy('id')->get();
+        $this->assertCount(2, $shipments);
+        $hubId = $shipments->first()->delivery_hub_id;
+        $endpoint = "/api/v1/hubs/{$hubId}/delivery-runs";
+        $assignment = [
+            'zone_id' => $shipments->first()->delivery_zone_id,
+            'courier_user_id' => $courier->id,
+            'service_date' => today()->toDateString(),
+        ];
+        $firstRun = $this->actingAs($operator)->postJson($endpoint, array_merge($assignment, [
+            'shipment_ids' => [$shipments[0]->id],
+        ]))->assertCreated()->json('data');
+        $this->actingAs($courier)->postJson("/api/v1/courier/delivery-runs/{$firstRun['id']}/accept")
+            ->assertOk();
+        $this->actingAs($operator)->postJson("/api/v1/hubs/{$hubId}/handover", [
+            'run_id' => $firstRun['id'], 'awbs' => [$shipments[0]->awb],
+        ])->assertOk();
+        $this->actingAs($courier)->postJson("/api/v1/courier/delivery-runs/{$firstRun['id']}/start")
+            ->assertOk();
+        $runShipmentId = DB::table('run_shipments')->where('run_id', $firstRun['id'])->value('id');
+        $this->actingAs($courier)->postJson("/api/v1/courier/run-shipments/{$runShipmentId}/result", [
+            'result' => 'FAILED', 'failure_reason' => 'PENERIMA_TIDAK_ADA',
+        ])->assertOk();
+        $this->assertSame('COMPLETED', DB::table('delivery_runs')->where('id', $firstRun['id'])->value('status'));
+
+        $courierList = $this->actingAs($operator)->getJson("/api/v1/hubs/{$hubId}/couriers")
+            ->assertOk()->json('data');
+        $this->assertSame(1, collect($courierList)->firstWhere('user_id', $courier->id)['unreturned_failed_count']);
+        $this->actingAs($operator)->postJson($endpoint, array_merge($assignment, [
+            'shipment_ids' => [$shipments[1]->id],
+        ]))->assertStatus(409);
+
+        $this->actingAs($operator)->postJson("/api/v1/hubs/{$hubId}/return-scan", [
+            'awb' => $shipments[0]->awb,
+        ])->assertOk();
+        $courierList = $this->actingAs($operator)->getJson("/api/v1/hubs/{$hubId}/couriers")
+            ->assertOk()->json('data');
+        $this->assertSame(0, collect($courierList)->firstWhere('user_id', $courier->id)['unreturned_failed_count']);
+        $this->actingAs($operator)->postJson($endpoint, array_merge($assignment, [
+            'shipment_ids' => [$shipments[1]->id],
+        ]))->assertCreated();
+    }
+
     public function test_redelivery_cannot_be_assigned_before_the_promised_date(): void
     {
         $shipment = DB::table('shipments')->where('status', 'WAITING_REDELIVERY')->first();
@@ -722,7 +854,7 @@ class SatriaFlowTest extends TestCase
         $operator = User::where('email', 'fajar.hidayat@anteraja.id')->firstOrFail();
         $courier = User::where('email', 'hanif.saputra@anteraja.id')->firstOrFail();
         $otherCourier = User::where('email', 'reza.firmansyah@anteraja.id')->firstOrFail();
-        $rescheduledCourier = User::where('email', 'galih.pratama@anteraja.id')->firstOrFail();
+        $rescheduledCourier = User::where('email', 'andika.wijaya@anteraja.id')->firstOrFail();
         $shipments = DB::table('shipments')->whereIn('awb', [
             '11008260000401', '11008260000402', '11008260000405',
         ])->orderBy('id')->get();
@@ -775,6 +907,89 @@ class SatriaFlowTest extends TestCase
         $this->actingAs($rescheduledCourier)->postJson("/api/v1/courier/delivery-runs/{$reassigned['id']}/respond", [
             'decisions' => [['shipment_id' => $rejected->id, 'decision' => 'ACCEPTED']],
         ])->assertOk()->assertJsonPath('data.status', 'ACCEPTED');
+    }
+
+    public function test_telegram_queues_key_customer_events_only(): void
+    {
+        $shipment = DB::table('shipments')->orderBy('id')->first();
+        $order = DB::table('orders')->where('id', $shipment->order_id)->first();
+        $eventId = app(SatriaService::class)->event($shipment->id, null, 'NOTICE_POLICY_CHECK', $shipment->status);
+        $service = app(SatriaService::class);
+        $service->notifyUser($eventId, $shipment->id, $order->customer_id, 'BUYER', 'PICKED_UP', '');
+        $service->notifyUser($eventId, $shipment->id, $order->customer_id, 'BUYER', 'DELIVERED', '');
+        $service->notifyUser($eventId, $shipment->id, $order->customer_id, 'BUYER', 'AWB_GENERATED', '');
+        $rows = DB::table('notifications')->where('tracking_event_id', $eventId)->get();
+        $this->assertCount(2, $rows);
+        $this->assertEqualsCanonicalizing(['AWB_GENERATED', 'DELIVERED'], $rows->pluck('template_key')->all());
+        $this->assertStringContainsString($shipment->awb, $rows->first()->message_text);
+    }
+
+    public function test_daily_report_queues_one_hub_summary_per_date(): void
+    {
+        config(['satria.telegram_mode' => 'MOCK', 'satria.n8n_webhook_url' => '']);
+        $hubAdmin = User::where('email', 'rianyuliawan1@anteraja.id')->firstOrFail();
+        $date = today()->toDateString();
+
+        $this->withToken((string) config('satria.internal_token'))
+            ->postJson('/api/v1/internal/reports/daily', ['report_date' => $date])->assertOk();
+        $this->postJson('/api/v1/internal/reports/daily', ['report_date' => $date])->assertOk();
+
+        $rows = DB::table('notifications as notification')
+            ->join('notification_targets as target', 'target.id', '=', 'notification.target_id')
+            ->where('target.user_id', $hubAdmin->id)->where('notification.template_key', 'DAILY_REPORT')
+            ->get(['notification.status', 'notification.message_text', 'notification.shipment_id']);
+        $this->assertCount(1, $rows);
+        $this->assertSame('SIMULATED', $rows->first()->status);
+        $this->assertNull($rows->first()->shipment_id);
+        $this->assertStringContainsString('unduh XLSX', $rows->first()->message_text);
+    }
+
+    public function test_delivery_assignment_message_links_to_its_run(): void
+    {
+        config(['satria.telegram_mode' => 'MOCK', 'satria.n8n_webhook_url' => '']);
+        $courier = User::where('email', 'afrien@anteraja.id')->firstOrFail();
+        $run = DB::table('delivery_runs')->where('courier_user_id', $courier->id)
+            ->where('status', 'PENDING_ACCEPT')->first();
+        $this->assertNotNull($run);
+        $shipmentId = DB::table('run_shipments')->where('run_id', $run->id)
+            ->orderBy('stop_order')->value('shipment_id');
+        $eventId = app(SatriaService::class)->event($shipmentId, null, 'DELIVERY_ASSIGNED',
+            'DELIVERY_ASSIGNED', ['run_id' => $run->id]);
+        app(SatriaService::class)->notifyUser($eventId, $shipmentId, $courier->id,
+            'COURIER', 'DELIVERY_ASSIGNED', 'Tugas baru.');
+        $notification = DB::table('notifications')->where('tracking_event_id', $eventId)->first();
+        $this->assertNotNull($notification);
+        $this->assertStringEndsWith('/courier-deliveries?run='.$run->id, $notification->action_url);
+        $this->assertStringContainsString($notification->action_url, $notification->message_text);
+    }
+
+    public function test_overdue_delivery_run_sends_one_reminder_to_courier_and_hub(): void
+    {
+        config(['satria.telegram_mode' => 'MOCK', 'satria.n8n_webhook_url' => '']);
+        $courier = User::where('email', 'afrien@anteraja.id')->firstOrFail();
+        $run = DB::table('delivery_runs')->where('courier_user_id', $courier->id)
+            ->where('status', 'PENDING_ACCEPT')->first();
+        $this->assertNotNull($run);
+        DB::table('delivery_runs')->where('id', $run->id)->update(['assigned_at' => now()->subMinutes(20)]);
+
+        $this->withToken((string) config('satria.internal_token'))
+            ->postJson("/api/v1/internal/tasks/{$run->id}/remind", ['type' => 'delivery_run'])
+            ->assertOk()->assertJsonPath('data.reminded', 1);
+        $this->postJson("/api/v1/internal/tasks/{$run->id}/remind", ['type' => 'delivery_run'])
+            ->assertOk()->assertJsonPath('data.reminded', 0);
+
+        $shipmentId = DB::table('run_shipments')->where('run_id', $run->id)
+            ->orderBy('stop_order')->value('shipment_id');
+        $events = DB::table('tracking_events')->where('shipment_id', $shipmentId)
+            ->where('event_type', 'ASSIGNMENT_REMINDER')->get(['id']);
+        $this->assertCount(1, $events);
+        $templates = DB::table('notifications')->where('tracking_event_id', $events->first()->id)
+            ->pluck('template_key')->all();
+        $this->assertSame(1, count(array_filter($templates, fn ($template): bool => $template === 'ASSIGNMENT_REMINDER')));
+        $this->assertContains('TASK_UNRESPONDED', $templates);
+        $reminderUrl = DB::table('notifications')->where('tracking_event_id', $events->first()->id)
+            ->where('template_key', 'ASSIGNMENT_REMINDER')->value('action_url');
+        $this->assertStringEndsWith('/courier-deliveries?run='.$run->id, $reminderUrl);
     }
 
     public function test_notification_uses_database_phone_and_correct_sender_profile(): void
@@ -884,7 +1099,7 @@ class SatriaFlowTest extends TestCase
         $notification = DB::table('notifications')->where('template_key', 'AWB_GENERATED')->first();
         $this->assertNotNull($notification);
         $this->assertSame('QUEUED', $notification->status);
-        $this->assertNotNull(DB::table('notifications')->where('template_key', 'PICKUP_READY')->first());
+        $this->assertNull(DB::table('notifications')->where('template_key', 'PICKUP_READY')->first());
 
         $this->getJson('/api/v1/internal/notifications/pending')->assertForbidden();
         $this->withToken((string) config('satria.internal_token'))

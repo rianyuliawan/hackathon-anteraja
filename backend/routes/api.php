@@ -71,6 +71,7 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/hubs/{id}/ready', [HubOperationsController::class, 'hubReady']);
         Route::get('/hubs/{id}/couriers', [HubOperationsController::class, 'hubCouriers']);
         Route::get('/hubs/{id}/delivery-runs', [HubOperationsController::class, 'hubRuns']);
+        Route::get('/hubs/{id}/shipments/{awb}/history', [HubOperationsController::class, 'shipmentHistory']);
         Route::post('/hubs/{id}/scan-in', [HubOperationsController::class, 'scanIn']);
         Route::post('/hubs/{id}/delivery-runs', [HubOperationsController::class, 'createRun']);
         Route::post('/hubs/{id}/delivery-runs/preview', [HubOperationsController::class, 'previewRun']);
@@ -80,6 +81,8 @@ Route::prefix('v1')->group(function (): void {
         Route::get('/courier/pickup-assignments', [CourierOperationsController::class, 'courierPickupAssignments']);
         Route::post('/courier/pickup-assignments/{id}/accept', [CourierOperationsController::class, 'acceptPickup']);
         Route::post('/courier/pickup-assignments/{id}/complete', [CourierOperationsController::class, 'completePickup']);
+        Route::get('/courier/shipments', [CourierOperationsController::class, 'searchShipments']);
+        Route::get('/courier/shipments/{awb}', [CourierOperationsController::class, 'courierShipment']);
         Route::get('/courier/delivery-runs', [CourierOperationsController::class, 'courierRuns']);
         Route::post('/courier/delivery-runs/{id}/accept', [CourierOperationsController::class, 'acceptRun']);
         Route::post('/courier/delivery-runs/{id}/respond', [CourierOperationsController::class, 'respondRun']);

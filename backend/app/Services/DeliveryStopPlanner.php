@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 class DeliveryStopPlanner
 {
@@ -56,8 +57,10 @@ class DeliveryStopPlanner
         }
 
         $allLocated = $origin !== null && collect($rows)->every(fn (array $row): bool => $row['latitude'] !== null);
+        $roadDurations = $allLocated ? $this->roadDurations($origin, $rows) : null;
         $ordered = [];
         $distance = 0.0;
+        $currentId = 0;
         $current = $origin;
 
         if ($allLocated) {
@@ -69,7 +72,10 @@ class DeliveryStopPlanner
                     $leg = $this->distance($current, [(float) $row['latitude'], (float) $row['longitude']]);
                     $ageCredit = min(5.0, max(0, $row['age_hours'] - 12) / 8);
                     $retryCredit = $row['attempt_count'] > 0 ? 1.0 : 0.0;
-                    $score = $leg - $ageCredit - $retryCredit;
+                    $roadMinutes = $roadDurations[$currentId][$id] ?? null;
+                    $score = $roadMinutes !== null
+                        ? $roadMinutes - $ageCredit * 3 - $retryCredit * 6
+                        : $leg - $ageCredit - $retryCredit;
                     if ($score < $bestScore || ($score === $bestScore && $id < $bestId)) {
                         $bestId = $id;
                         $bestScore = $score;
@@ -82,6 +88,7 @@ class DeliveryStopPlanner
                 $ordered[] = $row;
                 $distance += $bestDistance;
                 $current = [(float) $row['latitude'], (float) $row['longitude']];
+                $currentId = $bestId;
                 unset($rows[$bestId]);
             }
             $strategy = 'distance_age_priority';
@@ -109,6 +116,49 @@ class DeliveryStopPlanner
                 'latitude' => $origin[0] ?? null, 'longitude' => $origin[1] ?? null,
             ],
         ];
+    }
+
+    /** @param array{0: float, 1: float} $origin
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<int, array<int, float>>|null
+     */
+    private function roadDurations(array $origin, array $rows): ?array
+    {
+        $baseUrl = rtrim((string) config('satria.osrm_url'), '/');
+        if ($baseUrl === '') {
+            return null;
+        }
+        $points = [0 => $origin];
+        foreach ($rows as $id => $row) {
+            $points[$id] = [(float) $row['latitude'], (float) $row['longitude']];
+        }
+        $coordinates = collect($points)->map(fn (array $point): string => $point[1].','.$point[0])->implode(';');
+        try {
+            $response = Http::acceptJson()->timeout(4)->get($baseUrl.'/table/v1/driving/'.$coordinates,
+                ['annotations' => 'duration']);
+        } catch (\Throwable) {
+            return null;
+        }
+        if (! $response->successful() || $response->json('code') !== 'Ok') {
+            return null;
+        }
+        $matrix = $response->json('durations');
+        $ids = array_keys($points);
+        if (! is_array($matrix) || count($matrix) !== count($ids)) {
+            return null;
+        }
+        $durations = [];
+        foreach ($ids as $fromIndex => $fromId) {
+            foreach ($ids as $toIndex => $toId) {
+                $seconds = $matrix[$fromIndex][$toIndex] ?? null;
+                if (! is_numeric($seconds)) {
+                    return null;
+                }
+                $durations[$fromId][$toId] = (float) $seconds / 60;
+            }
+        }
+
+        return $durations;
     }
 
     /** @return array{0: float, 1: float}|null */

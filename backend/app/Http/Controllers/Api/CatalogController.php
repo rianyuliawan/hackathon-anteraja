@@ -232,6 +232,10 @@ class CatalogController extends Controller
             ->orderByDesc('created_at')->orderByDesc('id')->first();
         $attempt = $issue ? DB::table('delivery_attempts')->where('id', $issue->delivery_attempt_id)
             ->first(['failure_reason', 'attempted_at']) : null;
+        $attempts = $isCustomer ? DB::table('delivery_attempts')
+            ->where('shipment_id', $shipment->id)
+            ->orderBy('attempt_no')
+            ->get(['attempt_no', 'result', 'failure_reason', 'recipient_name', 'attempted_at']) : collect();
         $pickupPhoto = $isCustomer
             ? DB::table('pickup_assignments as a')->join('pickup_tasks as t', 't.id', '=', 'a.pickup_task_id')
                 ->where('t.shipment_id', $shipment->id)->where('a.status', 'COMPLETED')
@@ -287,6 +291,7 @@ class CatalogController extends Controller
             'delivery_photo_taken_at' => $deliveryPhoto ? $deliveryCapturedAt ?? $deliveryPhoto->attempted_at : null,
             'recipient_confirmed' => $isCustomer && DB::table('tracking_events')
                 ->where('shipment_id', $shipment->id)->where('event_type', 'BUYER_CONFIRMED_RECEIVED')->exists(),
+            'attempts' => $attempts,
             'events' => $events,
         ]]);
     }

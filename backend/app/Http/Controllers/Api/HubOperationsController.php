@@ -10,6 +10,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
@@ -156,11 +157,21 @@ class HubOperationsController extends Controller
     public function hubCouriers(Request $request, int $id): JsonResponse
     {
         $this->satria->requireHub($request->user(), $id);
+        $unreturnedFailed = DB::table('shipments')
+            ->where('delivery_hub_id', $id)
+            ->where('status', 'DELIVERY_FAILED')
+            ->where('custody_type', 'COURIER')
+            ->whereNotNull('current_courier_id')
+            ->select('current_courier_id')
+            ->selectRaw('COUNT(*) as total')
+            ->groupBy('current_courier_id')
+            ->pluck('total', 'current_courier_id');
         $rows = DB::table('courier_profiles as c')->join('users as u', 'u.id', '=', 'c.user_id')
             ->where('c.home_hub_id', $id)->where('u.active', true)
             ->select('c.*', 'u.name', 'u.email', 'u.phone')->orderBy('u.name')->get()
-            ->map(function ($courier): array {
+            ->map(function ($courier) use ($unreturnedFailed): array {
                 return array_merge((array) $courier, [
+                    'unreturned_failed_count' => (int) ($unreturnedFailed[$courier->user_id] ?? 0),
                     'zones' => DB::table('courier_zones as cz')->join('service_zones as z', 'z.id', '=', 'cz.zone_id')
                         ->where('cz.courier_user_id', $courier->user_id)
                         ->where('cz.service_type', 'DELIVERY')->get(['z.id', 'z.name', 'z.code']),
@@ -426,6 +437,89 @@ class HubOperationsController extends Controller
         return response()->json(['data' => $rows]);
     }
 
+    public function shipmentHistory(Request $request, int $id, string $awb): JsonResponse
+    {
+        $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
+        abort_unless(preg_match('/^[0-9]{14}$/', $awb), 404);
+        $shipment = DB::table('shipments')->where('awb', $awb)
+            ->where('delivery_hub_id', $id)->first();
+        abort_if($shipment === null, 404, 'Resi tidak ditemukan di hub ini.');
+        $order = DB::table('orders')->where('id', $shipment->order_id)
+            ->first(['recipient_name', 'destination_address_snapshot', 'destination_postcode',
+                'origin_contact_snapshot', 'origin_address_snapshot']);
+        $events = DB::table('tracking_events as event')
+            ->leftJoin('users as actor', 'actor.id', '=', 'event.actor_user_id')
+            ->leftJoin('hubs as hub', 'hub.id', '=', 'event.hub_id')
+            ->where('event.shipment_id', $shipment->id)
+            ->orderBy('event.occurred_at')->orderBy('event.id')
+            ->get(['event.id', 'event.event_type', 'event.status_after', 'event.details',
+                'event.occurred_at', 'actor.name as actor_name', 'hub.name as hub_name'])
+            ->map(function ($event): array {
+                $row = (array) $event;
+                $row['details'] = json_decode((string) $event->details, true) ?: [];
+
+                return $row;
+            });
+        $attempts = DB::table('delivery_attempts as attempt')
+            ->join('run_shipments as stop', 'stop.id', '=', 'attempt.run_shipment_id')
+            ->join('delivery_runs as run', 'run.id', '=', 'stop.run_id')
+            ->leftJoin('users as courier', 'courier.id', '=', 'run.courier_user_id')
+            ->where('attempt.shipment_id', $shipment->id)
+            ->orderBy('attempt.attempt_no')
+            ->get(['attempt.id', 'attempt.attempt_no', 'attempt.result', 'attempt.failure_reason',
+                'attempt.notes', 'attempt.recipient_name', 'attempt.attempted_at',
+                'attempt.delivery_photo_ref', 'run.id as run_id', 'courier.name as courier_name'])
+            ->map(function ($attempt): array {
+                $row = (array) $attempt;
+                $row['photo_available'] = $attempt->delivery_photo_ref !== null
+                    && Storage::disk('local')->exists($attempt->delivery_photo_ref);
+                unset($row['delivery_photo_ref']);
+
+                return $row;
+            });
+        $issues = DB::table('shipment_issues as issue')
+            ->join('delivery_attempts as attempt', 'attempt.id', '=', 'issue.delivery_attempt_id')
+            ->leftJoin('users as actor', 'actor.id', '=', 'issue.decided_by')
+            ->where('issue.shipment_id', $shipment->id)
+            ->orderBy('attempt.attempt_no')
+            ->get(['issue.id', 'attempt.attempt_no', 'issue.status', 'issue.decision',
+                'issue.decision_note', 'issue.scheduled_redelivery_at', 'issue.created_at',
+                'issue.decided_at', 'actor.name as decided_by_name']);
+        $notifications = DB::table('notifications as notification')
+            ->leftJoin('notification_targets as target', 'target.id', '=', 'notification.target_id')
+            ->leftJoin('users as recipient', 'recipient.id', '=', 'target.user_id')
+            ->where('notification.shipment_id', $shipment->id)
+            ->orderByDesc('notification.created_at')->orderByDesc('notification.id')
+            ->get(['notification.id', 'notification.logical_recipient', 'notification.template_key',
+                'notification.status', 'notification.delivery_mode', 'notification.created_at',
+                'notification.sent_at', 'notification.last_error', 'recipient.name as recipient_name']);
+        $pickupPhoto = DB::table('pickup_assignments as assignment')
+            ->join('pickup_tasks as task', 'task.id', '=', 'assignment.pickup_task_id')
+            ->where('task.shipment_id', $shipment->id)->where('assignment.status', 'COMPLETED')
+            ->whereNotNull('assignment.pickup_photo_ref')
+            ->orderByDesc('assignment.id')->first(['assignment.picked_up_at']);
+
+        return response()->json(['data' => [
+            'shipment' => [
+                'id' => $shipment->id, 'awb' => $shipment->awb, 'status' => $shipment->status,
+                'created_at' => $shipment->created_at, 'delivered_at' => $shipment->delivered_at,
+                'custody_type' => $shipment->custody_type,
+                'recipient_name' => $order?->recipient_name,
+                'destination_address' => $order?->destination_address_snapshot,
+                'destination_postcode' => $order?->destination_postcode,
+                'sender_name' => $order?->origin_contact_snapshot,
+                'origin_address' => $order?->origin_address_snapshot,
+            ],
+            'hub_name' => DB::table('hubs')->where('id', $id)->value('name'),
+            'pickup_photo_available' => $pickupPhoto !== null,
+            'pickup_photo_taken_at' => $pickupPhoto?->picked_up_at,
+            'events' => $events,
+            'attempts' => $attempts,
+            'issues' => $issues,
+            'notifications' => $notifications,
+        ]]);
+    }
+
     public function createRun(Request $request, int $id): JsonResponse
     {
         $this->satria->requireRole($request->user(), 'HUB_OPERATOR', $id);
@@ -456,6 +550,11 @@ class HubOperationsController extends Controller
                         ->orWhere('service_date', $input['service_date']);
                 })->exists(),
                 409, 'Kurir sedang mengantar atau sudah memiliki tugas aktif pada tanggal tersebut.');
+            abort_if(DB::table('shipments')->where('delivery_hub_id', $id)
+                ->where('current_courier_id', $courier->user_id)
+                ->where('status', 'DELIVERY_FAILED')
+                ->where('custody_type', 'COURIER')->exists(),
+                409, 'Kurir masih membawa paket gagal. Konfirmasi penerimaan paket di hub terlebih dahulu.');
             abort_unless(DB::table('courier_zones')->where('courier_user_id', $courier->user_id)
                 ->where('zone_id', $zone->id)->where('service_type', 'DELIVERY')->exists(),
                 422, 'Kurir tidak melayani zona pengantaran ini.');
