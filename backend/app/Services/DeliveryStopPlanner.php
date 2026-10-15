@@ -34,9 +34,12 @@ class DeliveryStopPlanner
             $exact = $this->point($order->destination_latitude, $order->destination_longitude);
             $point = $exact ?? $this->point($coverage?->latitude, $coverage?->longitude);
             $ageHours = max(0, now()->diffInMinutes($shipment->created_at, false) * -1 / 60);
-            $readyEvent = DB::table('tracking_events')->where('shipment_id', $shipment->id)
-                ->whereIn('event_type', ['ARRIVED_AT_DELIVERY_HUB', 'REDELIVERY_SCHEDULED'])
-                ->orderByDesc('occurred_at')->value('occurred_at');
+            $readyEvent = DB::table('tracking_events as event')
+                ->leftJoin('tracking_event_time_corrections as correction', 'correction.tracking_event_id', '=', 'event.id')
+                ->where('event.shipment_id', $shipment->id)
+                ->whereIn('event.event_type', ['ARRIVED_AT_DELIVERY_HUB', 'REDELIVERY_SCHEDULED'])
+                ->orderByRaw('COALESCE(correction.corrected_occurred_at, event.occurred_at) DESC')
+                ->value(DB::raw('COALESCE(correction.corrected_occurred_at, event.occurred_at)'));
             $readySince = $readyEvent ?? $shipment->created_at;
             $waitingHours = max(0, now()->diffInMinutes($readySince, false) * -1 / 60);
 

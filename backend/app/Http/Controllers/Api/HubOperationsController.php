@@ -140,9 +140,12 @@ class HubOperationsController extends Controller
             ->whereIn('status', ['READY_FOR_LAST_MILE', 'WAITING_REDELIVERY'])
             ->orderBy('created_at')->get()
             ->map(function ($shipment): array {
-                $readySince = DB::table('tracking_events')->where('shipment_id', $shipment->id)
-                    ->whereIn('event_type', ['ARRIVED_AT_DELIVERY_HUB', 'REDELIVERY_SCHEDULED'])
-                    ->orderByDesc('occurred_at')->value('occurred_at') ?? $shipment->created_at;
+                $readySince = DB::table('tracking_events as event')
+                    ->leftJoin('tracking_event_time_corrections as correction', 'correction.tracking_event_id', '=', 'event.id')
+                    ->where('event.shipment_id', $shipment->id)
+                    ->whereIn('event.event_type', ['ARRIVED_AT_DELIVERY_HUB', 'REDELIVERY_SCHEDULED'])
+                    ->orderByRaw('COALESCE(correction.corrected_occurred_at, event.occurred_at) DESC')
+                    ->value(DB::raw('COALESCE(correction.corrected_occurred_at, event.occurred_at)')) ?? $shipment->created_at;
 
                 return array_merge($this->satria->shipmentPayload($shipment), [
                     'ready_since' => $readySince,
@@ -450,10 +453,13 @@ class HubOperationsController extends Controller
         $events = DB::table('tracking_events as event')
             ->leftJoin('users as actor', 'actor.id', '=', 'event.actor_user_id')
             ->leftJoin('hubs as hub', 'hub.id', '=', 'event.hub_id')
+            ->leftJoin('tracking_event_time_corrections as correction', 'correction.tracking_event_id', '=', 'event.id')
             ->where('event.shipment_id', $shipment->id)
-            ->orderBy('event.occurred_at')->orderBy('event.id')
+            ->orderByRaw('COALESCE(correction.corrected_occurred_at, event.occurred_at)')
+            ->orderBy('event.id')
             ->get(['event.id', 'event.event_type', 'event.status_after', 'event.details',
-                'event.occurred_at', 'actor.name as actor_name', 'hub.name as hub_name'])
+                'actor.name as actor_name', 'hub.name as hub_name',
+                DB::raw('COALESCE(correction.corrected_occurred_at, event.occurred_at) AS occurred_at')])
             ->map(function ($event): array {
                 $row = (array) $event;
                 $row['details'] = json_decode((string) $event->details, true) ?: [];

@@ -201,10 +201,12 @@ class CatalogController extends Controller
             ]);
         abort_if($shipment === null, 404, 'Resi tidak ditemukan.');
 
-        $latestUpdate = DB::table('tracking_events')
-            ->where('shipment_id', $shipment->id)
-            ->orderByDesc('occurred_at')->orderByDesc('id')
-            ->value('occurred_at');
+        $latestUpdate = DB::table('tracking_events as event')
+            ->leftJoin('tracking_event_time_corrections as correction', 'correction.tracking_event_id', '=', 'event.id')
+            ->where('event.shipment_id', $shipment->id)
+            ->orderByRaw('COALESCE(correction.corrected_occurred_at, event.occurred_at) DESC')
+            ->orderByDesc('event.id')
+            ->value(DB::raw('COALESCE(correction.corrected_occurred_at, event.occurred_at)'));
 
         return response()->json(['data' => [
             'awb' => $shipment->awb,
@@ -225,10 +227,13 @@ class CatalogController extends Controller
         $events = DB::table('tracking_events as e')
             ->leftJoin('hubs as h', 'h.id', '=', 'e.hub_id')
             ->leftJoin('users as actor', 'actor.id', '=', 'e.actor_user_id')
+            ->leftJoin('tracking_event_time_corrections as correction', 'correction.tracking_event_id', '=', 'e.id')
             ->where('e.shipment_id', $shipment->id)
-            ->orderBy('e.occurred_at')->orderBy('e.id')
-            ->get(['e.id', 'e.event_type', 'e.status_after', 'e.occurred_at', 'e.details',
-                'h.name as hub_name', 'actor.name as actor_name'])
+            ->orderByRaw('COALESCE(correction.corrected_occurred_at, e.occurred_at)')
+            ->orderBy('e.id')
+            ->get(['e.id', 'e.event_type', 'e.status_after', 'e.details',
+                'h.name as hub_name', 'actor.name as actor_name',
+                DB::raw('COALESCE(correction.corrected_occurred_at, e.occurred_at) AS occurred_at')])
             ->map(function ($event) use ($isCustomer): array {
                 $details = $isCustomer ? json_decode((string) $event->details, true) : null;
                 $details = is_array($details) ? $details : [];
@@ -300,7 +305,7 @@ class CatalogController extends Controller
             'status' => $shipment->status,
             'created_at' => $shipment->created_at,
             'delivered_at' => $shipment->delivered_at,
-            'latest_update' => $events->last()?->occurred_at ?? $shipment->updated_at,
+            'latest_update' => $events->last()['occurred_at'] ?? $shipment->updated_at,
             'origin' => DB::table('hubs')->where('id', $shipment->origin_hub_id)->value('name'),
             'destination' => DB::table('hubs')->where('id', $shipment->delivery_hub_id)->value('name'),
             'parcel' => $parcel,

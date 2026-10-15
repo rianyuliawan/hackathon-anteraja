@@ -21,8 +21,9 @@ class DailyReportXlsx
 
         $hubEvents = DB::table('tracking_events as event')
             ->join('shipments as shipment', 'shipment.id', '=', 'event.shipment_id')
+            ->leftJoin('tracking_event_time_corrections as correction', 'correction.tracking_event_id', '=', 'event.id')
             ->where('shipment.delivery_hub_id', $hubId)
-            ->whereDate('event.occurred_at', $date)
+            ->whereRaw('DATE(COALESCE(correction.corrected_occurred_at, event.occurred_at)) = ?', [$date])
             ->select('event.event_type')
             ->selectRaw('COUNT(*) AS total')
             ->groupBy('event.event_type')
@@ -46,11 +47,12 @@ class DailyReportXlsx
         $activities = [['Waktu', 'AWB', 'Peristiwa', 'Status', 'Petugas']];
         $events = DB::table('tracking_events as event')
             ->join('shipments as shipment', 'shipment.id', '=', 'event.shipment_id')
+            ->leftJoin('tracking_event_time_corrections as correction', 'correction.tracking_event_id', '=', 'event.id')
             ->leftJoin('users as actor', 'actor.id', '=', 'event.actor_user_id')
             ->where('shipment.delivery_hub_id', $hubId)
-            ->whereDate('event.occurred_at', $date)
-            ->orderBy('event.occurred_at')->orderBy('event.id')
-            ->get(['event.occurred_at', 'shipment.awb', 'event.event_type', 'event.status_after', 'actor.name as actor_name']);
+            ->whereRaw('DATE(COALESCE(correction.corrected_occurred_at, event.occurred_at)) = ?', [$date])
+            ->orderByRaw('COALESCE(correction.corrected_occurred_at, event.occurred_at)')->orderBy('event.id')
+            ->get([DB::raw('COALESCE(correction.corrected_occurred_at, event.occurred_at) AS occurred_at'), 'shipment.awb', 'event.event_type', 'event.status_after', 'actor.name as actor_name']);
         foreach ($events as $event) {
             $activities[] = [(string) $event->occurred_at, $event->awb, $event->event_type,
                 $event->status_after ?? '', $event->actor_name ?? 'Sistem'];

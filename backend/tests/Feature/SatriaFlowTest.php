@@ -343,6 +343,30 @@ class SatriaFlowTest extends TestCase
             ->assertOk();
     }
 
+    public function test_tracking_uses_corrected_event_time_without_changing_audit_event(): void
+    {
+        $customer = User::where('email', 'siti.nurhaliza@anteraja.id')->firstOrFail();
+        $awb = '11007182634956';
+        $shipmentId = DB::table('shipments')->where('awb', $awb)->value('id');
+        $lastEvent = DB::table('tracking_events')->where('shipment_id', $shipmentId)
+            ->orderByDesc('occurred_at')->orderByDesc('id')->first();
+        $this->assertNotNull($lastEvent);
+        $originalTime = $lastEvent->occurred_at;
+        DB::table('tracking_event_time_corrections')->insert([
+            'tracking_event_id' => $lastEvent->id,
+            'original_occurred_at' => $originalTime,
+            'corrected_occurred_at' => DB::raw("TIMESTAMPTZ '{$originalTime}' - interval '7 hours'"),
+            'reason' => 'Legacy timezone correction test',
+        ]);
+
+        $preview = $this->actingAs($customer)->getJson("/api/v1/tracking/{$awb}/preview")->assertOk();
+        $detail = $this->actingAs($customer)->getJson("/api/v1/tracking/{$awb}")->assertOk();
+        $this->assertNotSame($originalTime, $preview->json('data.latest_update'));
+        $this->assertSame($preview->json('data.latest_update'), $detail->json('data.latest_update'));
+        $this->assertSame($detail->json('data.latest_update'), collect($detail->json('data.events'))->last()['occurred_at']);
+        $this->assertSame($originalTime, DB::table('tracking_events')->where('id', $lastEvent->id)->value('occurred_at'));
+    }
+
     public function test_checkout_has_no_awb_until_admin_approves_once(): void
     {
         $buyer = User::where('email', 'siti.nurhaliza@anteraja.id')->firstOrFail();

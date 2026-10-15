@@ -417,8 +417,9 @@ class SatriaService
                 ->where('s.delivery_hub_id', $hub->id)->where('a.result', 'DELIVERED')
                 ->where('a.attempt_no', '>', 1)->whereDate('a.attempted_at', $date)->count();
             $returns = DB::table('tracking_events as e')->join('shipments as s', 's.id', '=', 'e.shipment_id')
+                ->leftJoin('tracking_event_time_corrections as correction', 'correction.tracking_event_id', '=', 'e.id')
                 ->where('s.delivery_hub_id', $hub->id)->where('e.event_type', 'RETURN_REQUESTED')
-                ->whereDate('e.occurred_at', $date)->count();
+                ->whereRaw('DATE(COALESCE(correction.corrected_occurred_at, e.occurred_at)) = ?', [$date])->count();
             DB::table('daily_reports')->updateOrInsert(
                 ['report_date' => $date, 'hub_id' => $hub->id],
                 [
