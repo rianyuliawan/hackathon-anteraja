@@ -1,0 +1,16 @@
+{
+  "name": "Fashionaja",
+  "short_name": "Fashionaja",
+  "description": "Koleksi pakaian pilihan untuk setiap hari.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fffaf7",
+  "theme_color": "#392137",
+  "lang": "id",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
